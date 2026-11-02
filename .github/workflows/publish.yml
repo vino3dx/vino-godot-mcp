@@ -1,26 +1,133 @@
-name: Publish to npm
+
+name: Publish to npm and GitHub Release
 
 on:
-  release:
-    types: [published]      # 自动：发布 GitHub Release 时触发
-  workflow_dispatch:        # 手动：可以在 Actions 页面点 Run workflow
+  # 当默认分支的 package.json 更新时，检查是否有新版本
+  push:
+    branches:
+      - main
+    paths:
+      - "package.json"
+
+  # 支持手动触发
+  workflow_dispatch:
+
+# 防止多个发布任务同时执行
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
 
 jobs:
   publish:
+    name: Build, Publish and Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      # 1. 获取仓库代码
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. 配置 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - run: npm ci
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: npm ci
 
-      - run: npm run build
+      # 4. 运行测试（当前 npm test 已包含 TypeScript 构建）
+      - name: Run tests
+        run: npm test
 
-      - run: npm publish --provenance
+      # 5. 读取版本号并检查发布状态
+      - name: Check version and prepare tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid package version: $VERSION"
+            exit 1
+          fi
+
+          echo "Package: $PACKAGE_NAME"
+          echo "Version: $VERSION"
+          echo "Tag: $TAG"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # 检查 Git Tag 是否存在
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            TAG_EXISTS=true
+            echo "Git tag $TAG already exists."
+          else
+            TAG_EXISTS=false
+          fi
+
+          # 检查 npm 上是否已经存在该版本
+          if npm view "${PACKAGE_NAME}@${VERSION}" version >/dev/null 2>&1; then
+            NPM_EXISTS=true
+            echo "npm version $VERSION already exists."
+          else
+            NPM_EXISTS=false
+          fi
+
+          # npm 版本已存在但 Git Tag 不存在：
+          # 视为已经发布过的版本，避免普通更新重复创建版本 Tag
+          if [[ "$NPM_EXISTS" == "true" && "$TAG_EXISTS" == "false" ]]; then
+            echo "::notice::Version $VERSION is already published to npm. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "npm_exists=$NPM_EXISTS" >> "$GITHUB_OUTPUT"
+
+          # 如果 Tag 不存在，则自动创建并推送
+          if [[ "$TAG_EXISTS" == "false" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "$TAG"
+
+            echo "Created and pushed tag: $TAG"
+          fi
+
+      # 6. 发布 npm
+      - name: Publish to npm
+        if: steps.version.outputs.skip != 'true' && steps.version.outputs.npm_exists != 'true'
+        run: npm publish --provenance
+
+      # 7. 创建 GitHub Release
+      - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists. Skipping."
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+
+            echo "Created GitHub Release: $RELEASE_TAG"
+          fi
