@@ -93,7 +93,7 @@ npx -y vino-godot-mcp
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # registered globally?
 where.exe vino-godot-mcp               # launcher on PATH?
-vino-godot-mcp --version               # -> vino-godot-mcp 1.2.0
+vino-godot-mcp --version               # -> vino-godot-mcp 1.2.1
 vino-godot-mcp --help                  # usage, plus the stdio note below
 ```
 
@@ -104,7 +104,7 @@ vino-godot-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.0" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 55 tools exposed
 ```
 
 to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `VINO_GODOT_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
@@ -317,7 +317,7 @@ npx -y vino-godot-mcp
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # 全局是否已登记？
 where.exe vino-godot-mcp               # 启动脚本是否在 PATH 上？
-vino-godot-mcp --version               # 输出：vino-godot-mcp 1.2.0
+vino-godot-mcp --version               # 输出：vino-godot-mcp 1.2.1
 vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 ```
 
@@ -328,7 +328,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.0" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 55 tools exposed
 ```
 
 然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`VINO_GODOT_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。

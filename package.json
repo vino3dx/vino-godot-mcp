@@ -1,6 +1,6 @@
 {
   "name": "vino-godot-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Vino Godot MCP — semantic operation MCP server for the Godot engine (Vino Studios)",
   "type": "module",
   "bin": {
