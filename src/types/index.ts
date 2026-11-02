@@ -5,7 +5,12 @@ export type ErrorCode =
   | "INVALID_ARGUMENT" | "TOOL_NOT_FOUND" | "FILE_NOT_FOUND" | "PARSE_ERROR"
   | "LOCK_TIMEOUT" | "TASK_TIMEOUT" | "RUNTIME_REQUIRED" | "RUNTIME_FAILED" | "INTERNAL"
   | "PROJECT_NOT_FOUND" | "RESOURCE_NOT_FOUND" | "GODOT_NOT_FOUND" | "GODOT_PROCESS_FAILED"
-  | "VALIDATION_FAILED" | "FILE_CHANGED" | "PROTECTED_PATH";
+  | "VALIDATION_FAILED" | "FILE_CHANGED" | "PROTECTED_PATH"
+  // Editor Bridge 通道(editor 上下文):传输层失败与 Editor 侧语义失败分开报,不再统一成"连接关闭"。
+  | "BRIDGE_UNAVAILABLE" | "BRIDGE_DISCONNECTED" | "BRIDGE_TIMEOUT" | "BRIDGE_PROTOCOL_ERROR"
+  | "EDITOR_INSTANCE_MISMATCH"
+  | "EDITOR_NO_SCENE_OPEN" | "EDITOR_SCENE_ROOT_MISSING" | "EDITOR_NODE_NOT_FOUND"
+  | "EDITOR_OBJECT_INVALID" | "EDITOR_RESPONSE_TOO_LARGE";
 
 /** 最小 JSON Schema 子集(工具入参),校验器只支持这些字段,见 core/validation。 */
 export interface JsonSchema {
@@ -26,6 +31,7 @@ export interface JsonSchema {
 export type ToolDomain =
   | "project" | "scene" | "node" | "class" | "resource" | "script" | "shader" | "material"
   | "animation" | "filesystem" | "asset" | "debug" | "runtime" | "utility"
+  | "editor" // 运行中的 Godot Editor 实时状态(与 scene 的磁盘 .tscn、runtime 的运行场景区分)
   | "ui" | "tilemap" | "particles" | "navigation" | "audio"; // 后五个属于第二版领域
 
 export interface Logger {

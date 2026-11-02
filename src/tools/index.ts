@@ -13,6 +13,10 @@ import { runtimeCheckAddonStatus } from "./runtime/checkAddonStatus.js";
 import { runtimeVisualDebug } from "./runtime/visualDebug.js";
 import { runtimeStartSession, runtimeGetSession, runtimeReadSessionLogs, runtimeStopSession } from "./runtime/sessionTools.js";
 import { projectCapabilities } from "./project/capabilities.js";
+import { editorGetScene } from "./editor/getScene.js";
+import { editorGetTree } from "./editor/getTree.js";
+import { editorGetNode } from "./editor/getNode.js";
+import { editorGetLayout } from "./editor/getLayout.js";
 import { sceneGetTree } from "./scene/getTree.js";
 import { sceneGetNodeInfo } from "./scene/getNodeInfo.js";
 import { sceneFindNodes } from "./scene/findNodes.js";
@@ -68,6 +72,10 @@ export const allTools: ToolDefinition<AppContext>[] = [
   runtimeReadSessionLogs,
   runtimeStopSession,
   projectCapabilities,
+  editorGetScene,
+  editorGetTree,
+  editorGetNode,
+  editorGetLayout,
   sceneGetTree,
   sceneGetNodeInfo,
   sceneFindNodes,

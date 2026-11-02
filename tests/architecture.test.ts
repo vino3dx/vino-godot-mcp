@@ -55,7 +55,11 @@ test("only sdkServer.ts touches the MCP SDK", () => {
   assert.deepEqual(offenders, []);
 });
 
-test("stdout is reserved for MCP: no console.log in src (except dev-cli)", () => {
-  const offenders = walk(SRC).filter((f) => !f.endsWith("dev-cli.ts") && /console\.log|process\.stdout/.test(fs.readFileSync(f, "utf8")));
+// 例外只有两个入口:dev-cli.ts(调试 CLI)与 index.ts(--version/--help 等 CLI 自检输出)。
+// 服务体内部的任何文件都不允许碰 stdout;stdio 期间 stdout 必须干净(mcpServer.test.ts 覆盖)。
+const STDOUT_ALLOWED = new Set(["dev-cli.ts", "index.ts"]);
+
+test("stdout is reserved for MCP: no console.log in src (except CLI entries)", () => {
+  const offenders = walk(SRC).filter((f) => !STDOUT_ALLOWED.has(path.basename(f)) && /console\.log|process\.stdout/.test(fs.readFileSync(f, "utf8")));
   assert.deepEqual(offenders, []);
 });

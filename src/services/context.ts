@@ -17,9 +17,8 @@ import { ProjectValidationService } from "./projectValidationService.js";
 import { BatchFileService } from "./batchFileService.js";
 import { InputMapService } from "./inputMapService.js";
 import { RuntimeSessionManager } from "./runtimeSessionManager.js";
-import { NativeBridgeService } from "./nativeBridgeService.js";
+import { NativeBridgeService, defaultDescriptorPath } from "./nativeBridgeService.js";
 import { NativeBridgeClient } from "../godot/bridge/client.js";
-import path from "node:path";
 import { GdscriptProjectService } from "./gdscriptProjectService.js";
 
 /** 应用上下文:传给每个 Tool handler。新增 Service 在这里挂载。 */
@@ -81,7 +80,7 @@ export function createAppContext(logger: Logger, project: ProjectResolver = new 
     script,
     runtime: new RuntimeService({ godot, project, runQueue }),
     runtimeSessions: new RuntimeSessionManager(),
-    nativeBridge: new NativeBridgeService((root) => new NativeBridgeClient({ descriptorPath: process.env["GODOT_AI_MCP_BRIDGE_FILE"] ?? path.join(root, ".godot-ai-mcp", "bridge.json") })),
+    nativeBridge: new NativeBridgeService((root) => new NativeBridgeClient({ descriptorPath: defaultDescriptorPath(root) })),
     gdscriptProject: new GdscriptProjectService(file, script, scene),
     assets: new AssetService(project),
     validation: new ProjectValidationService({ godot, project, runQueue }),

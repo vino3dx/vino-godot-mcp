@@ -42,46 +42,71 @@ Runtime Adapter only calls Godot CLI when engine-dependent capabilities are requ
 
 Requires Node.js >= 22.
 
-Install into your project:
+Three names are involved. Mixing them up is the most common reason an install "seems" broken:
+
+| Thing | Value |
+|---|---|
+| npm package (what you install) | `vino-godot-mcp` |
+| CLI command (what you run) | `godot-ai-mcp` — from the `bin` field in `package.json` |
+| MCP server name (what `initialize` reports) | `godot-ai-mcp` |
+
+`vino-godot-mcp` is **not** an executable; only `godot-ai-mcp` is.
+
+**Option 1 — install into a project (local):**
 
 ```bash
 npm i vino-godot-mcp
 ```
 
-Expected output:
+Expected output (package counts and timings vary by environment; no error means success):
 
 ```text
 $ npm i vino-godot-mcp
 
-added 1 package, and audited 19 packages in 3s
+added 4 packages, and audited 5 packages in 5s
 
-2 packages are looking for funding
+1 package is looking for funding
   run `npm fund` for details
 
 found 0 vulnerabilities
 ```
 
-Package names, counts and timings vary by environment. As long as there is no error, the installation succeeded.
-
-Install globally to get the `godot-ai-mcp` command on your PATH:
+**Option 2 — install globally (puts the `godot-ai-mcp` command on your PATH):**
 
 ```bash
 npm i -g vino-godot-mcp
 ```
 
-Run it once without installing anything:
+> `npm i -g` writes **nothing** into the current directory. Files go to the global prefix: on Windows `%APPDATA%\npm\node_modules\vino-godot-mcp`, with launchers `%APPDATA%\npm\godot-ai-mcp.cmd` and `.ps1`. A still-empty project folder does not mean the install failed.
+
+**Option 3 — run once without installing:**
 
 ```bash
 npx -y vino-godot-mcp
 ```
 
-That last command starts a **stdio MCP server**. It logs
+`npx` resolves the *package* name; the command produced by a global install is `godot-ai-mcp`.
 
-```text
-[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 30 tools exposed
+#### Verify the installation (Windows)
+
+```powershell
+npm ls -g --depth=0 vino-godot-mcp   # registered globally?
+where.exe godot-ai-mcp               # launcher on PATH?
+godot-ai-mcp --version               # -> godot-ai-mcp 1.2.0
+godot-ai-mcp --help                  # usage, plus the stdio note below
 ```
 
-to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). You normally never run it by hand — your AI client launches it after the configuration below.
+`--version` and `--help` print to stdout and exit immediately; they never start the server, so they are safe smoke tests. Both read the version from `package.json`.
+
+#### Why the server "hangs" when you run it by hand
+
+Without arguments the process starts a **stdio MCP server** and logs
+
+```text
+[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 55 tools exposed
+```
+
+to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `GODOT_AI_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
 
 ### MCP Client Configuration (npm)
 
@@ -101,6 +126,8 @@ Add this to your AI client's MCP config (`.cursor/mcp.json`, CodeBuddy, Cline, �
   }
 }
 ```
+
+> If you installed globally, skip `npx`: use `"command": "godot-ai-mcp"` and drop `args`. Both forms launch the same stdio server.
 
 | Environment variable | Required | Meaning |
 |---|---|---|
@@ -178,14 +205,21 @@ Local-build client config (instead of `npx`):
 | Stage 2 | Core parsers, Scene/Resource services, FileService | Completed |
 | Stage 3 | Project config + GDScript/Shader management | Completed |
 
-**Tool Matrix (30 tools)**
+**Tool Matrix**
 
-| Category | Tools |
-|----------|-------|
-| Utility / Runtime | `utility_ping`, `utility_task_status`, `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot` |
-| Scene | `scene_get_tree`, `scene_find_nodes`, `scene_update_node_property`, `scene_remove_node` |
+The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `godot-ai-mcp --help` report the live count, and `GODOT_AI_MCP_GROUPS` can expose a subset (`project,shader`). No count is duplicated here.
+
+| Domain | Tools |
+|--------|-------|
+| Utility | `utility_ping`, `utility_task_status` |
+| Runtime | `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot`, `runtime_inspect_ui`, `runtime_check_addon_status`, `runtime_visual_debug`, `runtime_start_session`, `runtime_get_session`, `runtime_read_session_logs`, `runtime_stop_session` |
+| Project | `project_capabilities`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_input_get`, `project_input_update` |
+| Scene | `scene_get_tree`, `scene_get_node_info`, `scene_find_nodes`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_get_connections`, `scene_analyze_connections`, `scene_update_signal_connection`, `scene_update_node_property`, `scene_remove_node`, `scene_add_node`, `scene_reparent_node`, `scene_add_to_group`, `scene_remove_from_group`, `scene_instantiate_scene`, `scene_connect_signal`, `scene_disconnect_signal` |
 | Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external` |
-| Project / Shader / Script | `project_get_config`, `project_set_config`, `shader_get_info`, `shader_update_uniform_default`, `script_get_info`, `script_update_export_default` |
+| Shader | `shader_get_info`, `shader_update_uniform_default` |
+| Script | `script_get_info`, `script_update_export_default`, `script_create`, `script_analyze`, `script_find_references`, `script_update_function`, `script_project_graph` |
+| Class | `class_get_info`, `class_search`, `class_validate_member` |
+| Asset | `asset_list`, `asset_get_info` |
 
 > Tools that need authoritative class info (e.g. `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.godot-ai-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`.
 
@@ -225,46 +259,71 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 需要 Node.js >= 22。
 
-安装到当前项目：
+这里涉及三个名字，混淆它们是最常见的“看起来没装好”的原因：
+
+| 对象 | 值 |
+|---|---|
+| npm 包名（安装什么） | `vino-godot-mcp` |
+| CLI 命令名（运行什么） | `godot-ai-mcp` —— 来自 `package.json` 的 `bin` 字段 |
+| MCP 服务名（`initialize` 上报的名字） | `godot-ai-mcp` |
+
+`vino-godot-mcp` 本身**不是**可执行命令，只有 `godot-ai-mcp` 是。
+
+**方式一 —— 安装到项目（本地）：**
 
 ```bash
 npm i vino-godot-mcp
 ```
 
-预期输出：
+预期输出（包数量与耗时随环境不同，无报错即成功）：
 
 ```text
 $ npm i vino-godot-mcp
 
-added 1 package, and audited 19 packages in 3s
+added 4 packages, and audited 5 packages in 5s
 
-2 packages are looking for funding
+1 package is looking for funding
   run `npm fund` for details
 
 found 0 vulnerabilities
 ```
 
-包名、数量与耗时随环境不同。只要没有报错，即表示安装成功。
-
-全局安装后，可在任意位置直接使用 `godot-ai-mcp` 命令：
+**方式二 —— 全局安装（把 `godot-ai-mcp` 命令放进 PATH）：**
 
 ```bash
 npm i -g vino-godot-mcp
 ```
 
-不安装、直接运行一次：
+> `npm i -g` **不会**往当前目录写任何文件。包会落在全局前缀：Windows 上是 `%APPDATA%\npm\node_modules\vino-godot-mcp`，并生成启动脚本 `%APPDATA%\npm\godot-ai-mcp.cmd` 与 `.ps1`。所以当前项目目录仍然是空的，不代表安装失败。
+
+**方式三 —— 不安装，直接运行一次：**
 
 ```bash
 npx -y vino-godot-mcp
 ```
 
-最后这条命令会启动一个 **stdio MCP 服务**，它先输出
+`npx` 解析的是*包名*；全局安装后得到的命令是 `godot-ai-mcp`。
 
-```text
-[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 30 tools exposed
+#### 安装验证（Windows）
+
+```powershell
+npm ls -g --depth=0 vino-godot-mcp   # 全局是否已登记？
+where.exe godot-ai-mcp               # 启动脚本是否在 PATH 上？
+godot-ai-mcp --version               # 输出：godot-ai-mcp 1.2.0
+godot-ai-mcp --help                  # 用法说明 + 下面的 stdio 提示
 ```
 
-然后等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
+`--version` 与 `--help` 输出到 stdout 后立即退出，不会启动服务，可以放心当作自检命令；版本号从 `package.json` 读取。
+
+#### 为什么手动运行时会“卡住”
+
+不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
+
+```text
+[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 55 tools exposed
+```
+
+然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`GODOT_AI_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
 
 ### 在 AI 客户端中配置（npm）
 
@@ -284,6 +343,8 @@ npx -y vino-godot-mcp
   }
 }
 ```
+
+> 如果已经全局安装，可以不用 `npx`：把 `"command"` 改成 `"godot-ai-mcp"` 并删掉 `args`。两种写法拉起的是同一个 stdio 服务。
 
 | 环境变量 | 是否必需 | 说明 |
 |---|---|---|
@@ -361,14 +422,21 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 | Stage 2 | 核心解析器、Scene/Resource 服务、FileService | 已完成 |
 | Stage 3 | 项目配置 + GDScript/Shader 管理 | 已完成 |
 
-**当前工具矩阵（共 19 个）**
+**当前工具矩阵**
 
-| 分类 | 工具 |
+唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `godot-ai-mcp --help` 会报告实时数量，`GODOT_AI_MCP_GROUPS` 可只暴露部分领域（如 `project,shader`）。此处不再重复硬编码数量。
+
+| 领域 | 工具 |
 |------|------|
-| Utility / Runtime | `utility_ping`、`utility_task_status`、`runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot` |
-| Scene | `scene_get_tree`、`scene_find_nodes`、`scene_update_node_property`、`scene_remove_node` |
+| Utility | `utility_ping`、`utility_task_status` |
+| Runtime | `runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot`、`runtime_inspect_ui`、`runtime_check_addon_status`、`runtime_visual_debug`、`runtime_start_session`、`runtime_get_session`、`runtime_read_session_logs`、`runtime_stop_session` |
+| Project | `project_capabilities`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_input_get`、`project_input_update` |
+| Scene | `scene_get_tree`、`scene_get_node_info`、`scene_find_nodes`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_get_connections`、`scene_analyze_connections`、`scene_update_signal_connection`、`scene_update_node_property`、`scene_remove_node`、`scene_add_node`、`scene_reparent_node`、`scene_add_to_group`、`scene_remove_from_group`、`scene_instantiate_scene`、`scene_connect_signal`、`scene_disconnect_signal` |
 | Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external` |
-| Project / Shader / Script | `project_get_config`、`project_set_config`、`shader_get_info`、`shader_update_uniform_default`、`script_get_info`、`script_update_export_default` |
+| Shader | `shader_get_info`、`shader_update_uniform_default` |
+| Script | `script_get_info`、`script_update_export_default`、`script_create`、`script_analyze`、`script_find_references`、`script_update_function`、`script_project_graph` |
+| Class | `class_get_info`、`class_search`、`class_validate_member` |
+| Asset | `asset_list`、`asset_get_info` |
 
 > 需要权威类信息的工具（如 `scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.godot-ai-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。
 
