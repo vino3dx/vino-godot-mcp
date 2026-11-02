@@ -1,6 +1,6 @@
 # Project Direction
 
-`godot-ai-mcp` is an AI-agent Godot development system, not primarily a process launcher or a collection of file CRUD tools.
+**Vino Godot MCP** (`vino-godot-mcp`) is an AI-agent Godot development system, not primarily a process launcher or a collection of file CRUD tools.
 
 The product loop is:
 

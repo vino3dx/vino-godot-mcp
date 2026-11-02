@@ -10,7 +10,7 @@ export const scriptCreate: ToolDefinition<AppContext> = {
     "overwrite=false (default) refuses to touch an existing file. " +
     "Overwriting an existing file is restricted twice: " +
     "(1) protected directories — res://data/ and res://assets/ including every subdirectory (plus anything added through the " +
-    "GODOT_AI_MCP_PROTECTED_DIRS environment variable) can never be overwritten, the call fails with PROTECTED_PATH; " +
+    "VINO_GODOT_MCP_PROTECTED_DIRS environment variable) can never be overwritten, the call fails with PROTECTED_PATH; " +
     "(2) only text extensions may be replaced: .gd .gdshader .gdshaderinc .tres .tscn .cfg .json .md .txt, any other extension " +
     "(.png, .tres-less binaries, ...) is refused. Creating a file that does not exist yet is still allowed inside protected directories.",
   inputSchema: {

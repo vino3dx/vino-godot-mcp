@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-# Godot AI MCP — Native Editor Bridge.
+# Vino Godot MCP — Native Editor Bridge.
 #
 # 帧格式(与 src/godot/bridge/protocol.ts 严格一致):
 #   [4 字节小端长度][UTF-8 JSON]
@@ -52,9 +52,9 @@ var details_label: Label
 var language_select: OptionButton
 var reconnect_button: Button
 var language := "zh"
-const MENU_STATUS := "GodotAIMCP / Bridge Status"
-const MENU_PROJECT_PATH := "GodotAIMCP / Copy Project Path"
-const MENU_DASHBOARD := "GodotAIMCP / Open Dashboard"
+const MENU_STATUS := "Vino Godot MCP / Bridge Status"
+const MENU_PROJECT_PATH := "Vino Godot MCP / Copy Project Path"
+const MENU_DASHBOARD := "Vino Godot MCP / Open Dashboard"
 
 func _enter_tree() -> void:
 	_build_dashboard()
@@ -62,16 +62,16 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_STATUS, Callable(self, "_menu_status"))
 	add_tool_menu_item(MENU_PROJECT_PATH, Callable(self, "_menu_project_path"))
 	add_tool_menu_item(MENU_DASHBOARD, Callable(self, "_toggle_dashboard"))
-	port = int(ProjectSettings.get_setting("godot_ai_mcp/bridge_port", DEFAULT_PORT))
+	port = int(ProjectSettings.get_setting("vino_godot_mcp/bridge_port", DEFAULT_PORT))
 	token = _random_token()
 	session_id = "%s-%s" % [Time.get_unix_time_from_system(), randi()]
 	instance_id = session_id
 	project_id = str(ProjectSettings.get_setting("application/config/name", "unknown"))
 	var err := server.listen(port, "127.0.0.1")
 	if err != OK:
-		push_error("Godot AI MCP Bridge failed to listen on 127.0.0.1:%d (%s)" % [port, error_string(err)])
+		push_error("Vino Godot MCP Bridge failed to listen on 127.0.0.1:%d (%s)" % [port, error_string(err)])
 		return
-	descriptor_path = ProjectSettings.globalize_path("res://.godot-ai-mcp/bridge.json")
+	descriptor_path = ProjectSettings.globalize_path("res://.vino-godot-mcp/bridge.json")
 	DirAccess.make_dir_recursive_absolute(descriptor_path.get_base_dir())
 	_write_descriptor()
 
@@ -105,10 +105,10 @@ func _toggle_dashboard() -> void:
 
 func _build_dashboard() -> void:
 	dock = VBoxContainer.new()
-	dock.name = "GodotAIMCP"
+	dock.name = "VinoGodotMCP"
 	dock.custom_minimum_size = Vector2(320, 240)
 	var title := Label.new()
-	title.text = "GodotAIMCP"
+	title.text = "Vino Godot MCP"
 	title.add_theme_font_size_override("font_size", 18)
 	dock.add_child(title)
 	var language_row := HBoxContainer.new()
@@ -142,12 +142,12 @@ func _build_dashboard() -> void:
 	dock.add_child(tabs)
 	var service := RichTextLabel.new()
 	service.bbcode_enabled = true
-	service.text = "[b]MCP Service[/b]\nPackage: vino-godot-mcp\nStatus: use npx -y for zero-install startup\nInstall/check: npm i vino-godot-mcp\nConfig: npx -y vino-godot-mcp\n\nGODOT_PATH and GODOT_PROJECT_PATH must point to this Godot installation and project.\nThe service reads .godot-ai-mcp/bridge.json while the editor is open."
+	service.text = "[b]MCP Service[/b]\nPackage: vino-godot-mcp\nStatus: use npx -y for zero-install startup\nInstall/check: npm i vino-godot-mcp\nConfig: npx -y vino-godot-mcp\n\nGODOT_PATH and GODOT_PROJECT_PATH must point to this Godot installation and project.\nThe service reads .vino-godot-mcp/bridge.json while the editor is open."
 	tabs.add_child(service)
 	tabs.set_tab_title(0, "MCP Service")
 	var docs := RichTextLabel.new()
 	docs.bbcode_enabled = true
-	docs.text = "[b]Quick start[/b]\n1. Enable GodotAIMCP.\n2. Keep the editor open.\n3. Set GODOT_PROJECT_PATH to this project.\n4. Call editor_get_scene / editor_get_tree from MCP."
+	docs.text = "[b]Quick start[/b]\n1. Enable Vino Godot MCP.\n2. Keep the editor open.\n3. Set GODOT_PROJECT_PATH to this project.\n4. Call editor_get_scene / editor_get_tree from MCP."
 	tabs.add_child(docs)
 	tabs.set_tab_title(1, "Documentation")
 	_update_dashboard()
@@ -164,15 +164,15 @@ func _reconnect_bridge() -> void:
 		server.stop()
 	var err := server.listen(port, "127.0.0.1")
 	if err != OK:
-		push_error("GodotAIMCP reconnect failed: %s" % error_string(err))
+		push_error("Vino Godot MCP reconnect failed: %s" % error_string(err))
 	_update_dashboard()
 
 func _text(key: String) -> String:
 	var translations := {
-		"zh": {"working": "godot-ai-mcp 正在工作", "stopped": "godot-ai-mcp 未连接", "reconnect": "重新连接", "details": "Godot：%s\n项目：%s\n路径：%s\n地址：127.0.0.1\n端口：%d\n协议：%d\nSession：%s"},
-		"en": {"working": "godot-ai-mcp is working", "stopped": "godot-ai-mcp disconnected", "reconnect": "Reconnect", "details": "Godot: %s\nProject: %s\nPath: %s\nHost: 127.0.0.1\nPort: %d\nProtocol: %d\nSession: %s"},
-		"ja": {"working": "godot-ai-mcp は動作中です", "stopped": "godot-ai-mcp は未接続です", "reconnect": "再接続", "details": "Godot：%s\nプロジェクト：%s\nパス：%s\nホスト：127.0.0.1\nポート：%d\nプロトコル：%d\nセッション：%s"},
-		"ko": {"working": "godot-ai-mcp 동작 중", "stopped": "godot-ai-mcp 연결 안 됨", "reconnect": "다시 연결", "details": "Godot: %s\n프로젝트: %s\n경로: %s\n호스트: 127.0.0.1\n포트: %d\n프로토콜: %d\n세션: %s"}
+		"zh": {"working": "vino-godot-mcp 正在工作", "stopped": "vino-godot-mcp 未连接", "reconnect": "重新连接", "details": "Godot：%s\n项目：%s\n路径：%s\n地址：127.0.0.1\n端口：%d\n协议：%d\nSession：%s"},
+		"en": {"working": "vino-godot-mcp is working", "stopped": "vino-godot-mcp disconnected", "reconnect": "Reconnect", "details": "Godot: %s\nProject: %s\nPath: %s\nHost: 127.0.0.1\nPort: %d\nProtocol: %d\nSession: %s"},
+		"ja": {"working": "vino-godot-mcp は動作中です", "stopped": "vino-godot-mcp は未接続です", "reconnect": "再接続", "details": "Godot：%s\nプロジェクト：%s\nパス：%s\nホスト：127.0.0.1\nポート：%d\nプロトコル：%d\nセッション：%s"},
+		"ko": {"working": "vino-godot-mcp 동작 중", "stopped": "vino-godot-mcp 연결 안 됨", "reconnect": "다시 연결", "details": "Godot: %s\n프로젝트: %s\n경로: %s\n호스트: 127.0.0.1\n포트: %d\n프로토콜: %d\n세션: %s"}
 	}
 	return translations.get(language, translations["zh"]).get(key, key)
 
@@ -234,7 +234,7 @@ func _process_frames() -> void:
 		var length := input.decode_u32(0)
 		if length > MAX_MESSAGE_BYTES:
 			# 帧头不可信(通常是字节序/协议不匹配):断开而不是死等。
-			push_warning("GodotAIMCP: incoming frame length %d exceeds limit, closing connection" % length)
+			push_warning("Vino Godot MCP: incoming frame length %d exceeds limit, closing connection" % length)
 			peer.disconnect_from_host()
 			peer = null
 			input = PackedByteArray()

@@ -9,6 +9,6 @@ export const utilityPing: ToolDefinition<AppContext> = {
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
   async handler(args) {
-    return { data: { pong: true, server: "godot-ai-mcp", targetGodot: "4.6.3", node: process.version, echo: args["echo"] ?? null } };
+    return { data: { pong: true, server: "vino-godot-mcp", targetGodot: "4.6.3", node: process.version, echo: args["echo"] ?? null } };
   },
 };

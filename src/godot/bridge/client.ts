@@ -7,7 +7,7 @@ export class NativeBridgeError extends Error {
 }
 
 /**
- * `.godot-ai-mcp/bridge.json`(插件在 Editor 启动时写入)。
+ * `.vino-godot-mcp/bridge.json`(插件在 Editor 启动时写入)。
  * 后四个字段是 T13-C1 新增的:它们让调用方能在不断言"某个 Editor"的情况下核对 PID / 项目 / 会话。
  */
 export interface BridgeDescriptor {

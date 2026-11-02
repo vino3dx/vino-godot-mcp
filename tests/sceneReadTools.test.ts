@@ -306,10 +306,10 @@ test("scene_get_node_info 服务层: 引擎不可用时 GODOT_NOT_FOUND,并说�
   assert.match(e.message, /GODOT_PATH/);
   assert.equal(e.details?.["godotPath"], null);
   assert.equal(e.details?.["requiredFor"], "ClassDB API dump (extension_api.json)");
-  assert.ok(!fs.existsSync(path.join(dir, ".godot-ai-mcp")), "引擎不可用时不得留下缓存目录");
+  assert.ok(!fs.existsSync(path.join(dir, ".vino-godot-mcp")), "引擎不可用时不得留下缓存目录");
 });
 
-test("scene_get_node_info 服务层: 冷启动 dump 到 <工程根>/.godot-ai-mcp/extension-api/<版本>.json,之后命中缓存", async (t) => {
+test("scene_get_node_info 服务层: 冷启动 dump 到 <工程根>/.vino-godot-mcp/extension-api/<版本>.json,之后命中缓存", async (t) => {
   const { dir } = makeHost(t);
   const { service, calls } = makeStubService(dir);
   const info = await service.getClassInfo(undefined, "Widget");
@@ -330,7 +330,7 @@ test("scene_get_node_info 服务层: 冷启动 dump 到 <工程根>/.godot-ai-mc
   // `enum::GlobalMode` 没有类名前缀 → 到 global_enums 里取(4.6.3 实测 Error/Side 这类就是这样)
   assert.deepEqual(info.properties[2]?.enum?.values, [{ name: "GLOBAL_A", value: 0 }]);
 
-  const cacheFile = path.join(dir, ".godot-ai-mcp", "extension-api", `${STUB_CACHE_KEY}.json`);
+  const cacheFile = path.join(dir, ".vino-godot-mcp", "extension-api", `${STUB_CACHE_KEY}.json`);
   assert.equal(info.source.cacheFile, cacheFile);
   assert.ok(fs.existsSync(cacheFile), "dump 产物应被 rename 成缓存文件");
   assert.equal(calls.length, 1);
@@ -346,7 +346,7 @@ test("scene_get_node_info 服务层: 冷启动 dump 到 <工程根>/.godot-ai-mc
 test("scene_get_node_info 服务层: 缓存损坏 → 删除并重新 dump;dump 失败 → GODOT_PROCESS_FAILED 带日志", async (t) => {
   const { dir } = makeHost(t);
   const { service, calls } = makeStubService(dir);
-  const cacheDir = path.join(dir, ".godot-ai-mcp", "extension-api");
+  const cacheDir = path.join(dir, ".vino-godot-mcp", "extension-api");
   fs.mkdirSync(cacheDir, { recursive: true });
   const cacheFile = path.join(cacheDir, `${STUB_CACHE_KEY}.json`);
   fs.writeFileSync(cacheFile, '{"classes": [{"name":'); // 被截断的缓存

@@ -7,7 +7,7 @@ import { GodotMcpError } from "../errors.js";
 import { FileGuard, RES_PREFIX, within } from "./fileGuard.js";
 
 /** 追加受保护目录的环境变量(逗号分隔的 `res://` 前缀)。默认两项始终生效,没有关闭开关。 */
-export const PROTECTED_DIRS_ENV = "GODOT_AI_MCP_PROTECTED_DIRS";
+export const PROTECTED_DIRS_ENV = "VINO_GODOT_MCP_PROTECTED_DIRS";
 
 /** 默认受保护目录(项目相对路径,含所有子目录)。 */
 export const DEFAULT_PROTECTED_DIRS: readonly string[] = ["data", "assets"];

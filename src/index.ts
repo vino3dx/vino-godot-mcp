@@ -9,8 +9,8 @@ import { startSdkServer } from "./mcp/server/sdkServer.js";
 import { createAppContext, type AppContext } from "./services/context.js";
 import { allTools } from "./tools/index.js";
 
-/** bin 命令名(package.json 的 bin 键),与 npm 包名 `vino-godot-mcp` 不同。 */
-export const CLI_NAME = "godot-ai-mcp";
+/** CLI 命令名(package.json 的 bin 键),与 npm 包名 `vino-godot-mcp` 一致。 */
+export const CLI_NAME = "vino-godot-mcp";
 
 /**
  * 版本号唯一来源:package.json。
@@ -30,7 +30,7 @@ export const SERVER_INFO: { name: string; version: string } = { name: CLI_NAME, 
 
 export function buildHost(logger = createLogger()): ToolHost<AppContext> {
   const registry = new ToolRegistry<AppContext>().registerAll(allTools);
-  return new ToolHost(registry, createAppContext(logger), logger, parseEnabledDomains(process.env["GODOT_AI_MCP_GROUPS"]));
+  return new ToolHost(registry, createAppContext(logger), logger, parseEnabledDomains(process.env["VINO_GODOT_MCP_GROUPS"]));
 }
 
 async function main(): Promise<void> {
@@ -63,7 +63,7 @@ export function helpText(): string {
   return [
     versionText(),
     "",
-    "MCP server for the Godot engine (Model Context Protocol, stdio transport).",
+    "Vino Godot MCP — MCP server for the Godot engine (Model Context Protocol, stdio transport).",
     "",
     "Usage:",
     `  ${CLI_NAME}                 Start the MCP stdio server (launched by your AI client)`,
@@ -76,7 +76,7 @@ export function helpText(): string {
     "  to stderr, stdout belongs to the MCP protocol. Ctrl+C to quit.",
     "",
     "npm package: vino-godot-mcp   (npx -y vino-godot-mcp)",
-    "Docs: https://github.com/vino3dx/godot-ai-mcp#readme",
+    "Docs: https://github.com/vino3dx/vino-godot-mcp#readme",
     "",
   ].join("\n");
 }
@@ -95,7 +95,7 @@ export function runCli(argv: readonly string[]): void {
       process.exitCode = 2;
       return;
     case "serve":
-      main().catch((e) => { process.stderr.write(`[godot-ai-mcp] fatal: ${e instanceof Error ? e.stack : String(e)}\n`); process.exit(1); });
+      main().catch((e) => { process.stderr.write(`[${CLI_NAME}] fatal: ${e instanceof Error ? e.stack : String(e)}\n`); process.exit(1); });
       return;
   }
 }

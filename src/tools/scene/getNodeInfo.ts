@@ -8,7 +8,7 @@ export const sceneGetNodeInfo: ToolDefinition<AppContext> = {
     "Return authoritative ClassDB information for a node type (nodeType, required): the inheritance chain (parent -> Object), " +
     "the class's own properties (name, type, and enum name/values when the property maps to an enum), and signals with their " +
     "argument signatures. Data comes from the engine's own API dump (godot --dump-extension-api), cached per engine version " +
-    "under <projectRoot>/.godot-ai-mcp/extension-api/ so the engine is not started on every call. " +
+    "under <projectRoot>/.vino-godot-mcp/extension-api/ so the engine is not started on every call. " +
     "Property hint_string is NOT available in that dump. If no Godot executable is configured the tool fails with GODOT_NOT_FOUND " +
     "instead of guessing. Purely static tool writers (e.g. scene_add_node) remain engine-independent.",
   inputSchema: {

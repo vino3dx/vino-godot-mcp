@@ -1,10 +1,10 @@
 {
   "name": "vino-godot-mcp",
   "version": "1.2.0",
-  "description": "MCP server for Godot engine AI tools",
+  "description": "Vino Godot MCP — semantic operation MCP server for the Godot engine (Vino Studios)",
   "type": "module",
   "bin": {
-    "godot-ai-mcp": "./dist/src/index.js"
+    "vino-godot-mcp": "./dist/src/index.js"
   },
   "files": [
     "dist/src",
@@ -22,14 +22,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/vino3dx/godot-ai-mcp.git"
+    "url": "https://github.com/vino3dx/vino-godot-mcp.git"
   },
   "author": "vino3dx",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/vino3dx/godot-ai-mcp/issues"
+    "url": "https://github.com/vino3dx/vino-godot-mcp/issues"
   },
-  "homepage": "https://github.com/vino3dx/godot-ai-mcp#readme",
+  "homepage": "https://github.com/vino3dx/vino-godot-mcp#readme",
   "keywords": [
     "godot",
     "mcp",

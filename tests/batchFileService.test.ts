@@ -11,7 +11,7 @@ import { sha256Hex } from "../src/core/filesystem/safeWrite.js";
 import { safeWriteFile } from "../src/core/filesystem/safeWrite.js";
 
 function fixture(): { root: string; batch: BatchFileService } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "godot-ai-mcp-batch-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vino-godot-mcp-batch-"));
   fs.writeFileSync(path.join(root, "project.godot"), "[application]\nconfig/name=\"Batch\"\n");
   fs.writeFileSync(path.join(root, "a.gd"), "extends Node\n");
   fs.writeFileSync(path.join(root, "b.gd"), "extends Node\n");

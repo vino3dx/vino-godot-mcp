@@ -16,7 +16,7 @@ import path from "node:path";
 export const MCP_RESULT_PREFIX = "MCP_RESULT_JSON=";
 
 /** 临时 GDScript 的落盘目录(系统临时目录下,绝不写进用户工程)。 */
-export const TEMP_SCRIPT_DIR = path.join(os.tmpdir(), "godot-ai-mcp");
+export const TEMP_SCRIPT_DIR = path.join(os.tmpdir(), "vino-godot-mcp");
 
 export interface TempScriptOptions {
   /** 文件名前缀,便于人工定位遗留文件(默认 "mcp")。 */

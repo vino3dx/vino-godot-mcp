@@ -1,12 +1,12 @@
 {
   "mcpServers": {
-    "godot-ai-mcp": {
+    "vino-godot-mcp": {
       "command": "npx",
       "args": ["-y", "vino-godot-mcp"],
       "env": {
         "GODOT_PATH": "E:/Program Files/Godot Engine/Godot_v4.6.3-stable_win64.exe/Godot_v4.6.3-stable_win64_console.exe",
         "GODOT_PROJECT_PATH": "D:/MCP/godot-ai-mcp/godot_test",
-        "GODOT_AI_MCP_LOG": "debug"
+        "VINO_GODOT_MCP_LOG": "debug"
       }
     }
   }

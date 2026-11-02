@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`godot-ai-mcp` is a Godot semantic-operation MCP for AI agents. Its primary job is to inspect, create, modify, organize, and validate Godot objects: scenes, nodes, signals, groups, resources, and project settings.
+**Vino Godot MCP** (`vino-godot-mcp`) is a Godot semantic-operation MCP for AI agents. Its primary job is to inspect, create, modify, organize, and validate Godot objects: scenes, nodes, signals, groups, resources, and project settings.
 
 The current TypeScript implementation is a safe offline/file channel. It must not claim to be an authoritative object channel: a `.tscn` or `.tres` parser cannot fully reproduce Godot's runtime types, defaults, editor state, resource validation, or serialization behavior.
 

@@ -35,7 +35,7 @@ async function connectClient(mode: "legacy" | "auto"): Promise<{ client: Client;
     args: [SERVER_ENTRY],
     cwd: path.resolve(path.dirname(SERVER_ENTRY), "../.."),
     stderr: "pipe",
-    env: { ...getDefaultEnvironment(), GODOT_AI_MCP_LOG: "debug" },
+    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "debug" },
   });
 
   const stderr = transport.stderr;
@@ -44,7 +44,7 @@ async function connectClient(mode: "legacy" | "auto"): Promise<{ client: Client;
   stderr.on("data", (c: Buffer) => { logs += c.toString(); });
 
   const client = new Client(
-    { name: "godot-ai-mcp-e2e", version: "0.0.0" },
+    { name: "vino-godot-mcp-e2e", version: "0.0.0" },
     mode === "auto" ? { versionNegotiation: { mode: "auto" } } : undefined,
   );
   // connect 成功本身就证明 stdout 是干净的:任何多余输出都会破坏 JSON-RPC 帧。
@@ -108,7 +108,7 @@ test("real MCP client (2025-era handshake): tools/list carries JSON Schema, unif
 
   // --- 日志走 stderr,而不是 stdout ---
   await waitFor(() => logs().includes("listening on stdio"));
-  assert.match(logs(), /\[godot-ai-mcp\] INFO .*listening on stdio/);
+  assert.match(logs(), /\[vino-godot-mcp\] INFO .*listening on stdio/);
 });
 
 test("real MCP client (modern 2026-07-28 era): server/discover path works too", async (t) => {

@@ -2,7 +2,7 @@
 //
 // 数据来源:引擎自己导出的 `extension_api.json`(`godot --headless --dump-extension-api`)。
 // 关键设计 —— **不在每次调用时启动引擎**:
-//   1. 产物按引擎版本缓存到 `<被操作工程根>/.godot-ai-mcp/extension-api/<版本>.json`
+//   1. 产物按引擎版本缓存到 `<被操作工程根>/.vino-godot-mcp/extension-api/<版本>.json`
 //      (该目录已在本仓 .gitignore,也会由 README 提示用户忽略);
 //   2. 进程内再缓存"解析后的精简索引"(丢弃方法体,只留类/属性/信号/枚举);
 //   3. 缓存键取 `godot --version` 的**完整原文**(如 4.6.3.stable.official.7d41c59c4)——
@@ -29,7 +29,7 @@ import { defaultRunRunner, type GodotRunRunner, type RunProcessResult } from "..
 import type { GodotCliService } from "./godotCli.js";
 
 /** 缓存目录(工程根下)。 */
-export const API_CACHE_DIR = ".godot-ai-mcp";
+export const API_CACHE_DIR = ".vino-godot-mcp";
 /** 缓存子目录(按工具领域分组,便于以后放别的缓存)。 */
 export const API_CACHE_SUBDIR = "extension-api";
 
@@ -168,7 +168,7 @@ export class GodotApiService {
     return { className, exists: Boolean(found), member, source: info.source };
   }
 
-  /** `<项目根>/.godot-ai-mcp/extension-api/<版本>.json`(对外暴露给测试与文档)。 */
+  /** `<项目根>/.vino-godot-mcp/extension-api/<版本>.json`(对外暴露给测试与文档)。 */
   cacheFileFor(projectRoot: string, version: string): string {
     return path.join(projectRoot, API_CACHE_DIR, API_CACHE_SUBDIR, `${cacheKeyOf(version)}.json`);
   }

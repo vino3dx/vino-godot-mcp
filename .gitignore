@@ -3,7 +3,10 @@ node_modules/
 # 构建产物与本地工作目录,不入库(.workbuddy/ 是本机记忆/日志目录)
 dist/
 .workbuddy/
+# 旧名缓存/日志目录:保留忽略规则,避免历史工作区出现未跟踪文件
 .godot-ai-mcp/
 .godot-ai-mcp-log/
+.vino-godot-mcp/
+.vino-godot-mcp-log/
 # Godot 编辑器缓存(每个工程下的 .godot/,含二进制缓存,不入库)
 .godot/

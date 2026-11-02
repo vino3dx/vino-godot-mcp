@@ -10,12 +10,12 @@ config_version=5
 
 [application]
 
-config/name="GodotAIMCP Test Project"
+config/name="Vino Godot MCP Test Project"
 config/features=PackedStringArray("4.6")
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/godot-ai-mcp/plugin.cfg")
+enabled=PackedStringArray("res://addons/vino-godot-mcp/plugin.cfg")
 
 [rendering]
 

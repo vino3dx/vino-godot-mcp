@@ -117,7 +117,7 @@ export interface CaptureScreenshotOptions {
 }
 
 export interface CaptureScreenshotResult {
-  /** 截图文件绝对路径(系统临时目录下 godot-ai-mcp/screenshots/)。 */
+  /** 截图文件绝对路径(系统临时目录下 vino-godot-mcp/screenshots/)。 */
   filePath: string;
   /** 实际渲染尺寸(工程 viewport 设置,脚本经 stdout 回传)。 */
   renderSize: { width: number; height: number };
@@ -256,7 +256,7 @@ export class RuntimeService {
     const { path: file, source } = this.locate();
     const projectDir = this.projectDir(o.projectPath);
     const waitFrames = o.waitFrames ?? DEFAULT_WAIT_FRAMES;
-    const screenshotDir = path.join(os.tmpdir(), "godot-ai-mcp", "screenshots");
+    const screenshotDir = path.join(os.tmpdir(), "vino-godot-mcp", "screenshots");
     const outPath = path.join(screenshotDir, `shot-${randomUUID()}.png`);
     fs.mkdirSync(screenshotDir, { recursive: true });
     let res: RuntimeRunResult;

@@ -108,7 +108,7 @@ export class NativeBridgeService {
 }
 
 export function defaultDescriptorPath(root: string): string {
-  return process.env["GODOT_AI_MCP_BRIDGE_FILE"] ?? path.join(root, ".godot-ai-mcp", "bridge.json");
+  return process.env["VINO_GODOT_MCP_BRIDGE_FILE"] ?? path.join(root, ".vino-godot-mcp", "bridge.json");
 }
 
 function transportOf(d: BridgeDescriptor, descriptorPath: string): BridgeTransport {

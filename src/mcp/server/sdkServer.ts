@@ -63,7 +63,7 @@ export function toSdkToolSchema(json: JsonSchema): ToolArgsSchema {
   return {
     "~standard": {
       version: 1,
-      vendor: "godot-ai-mcp",
+      vendor: "vino-godot-mcp",
       types,
       validate: (value: unknown) => ({ value: (value ?? {}) as ToolArgs }),
       jsonSchema: {

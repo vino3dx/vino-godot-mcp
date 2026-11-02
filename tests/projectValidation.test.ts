@@ -9,7 +9,7 @@ import { ProjectResolver } from "../src/core/project/projectResolver.js";
 import { ProjectValidationService } from "../src/services/projectValidationService.js";
 
 test("project validation separates syntax, resources and runtime status", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "godot-ai-mcp-validate-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vino-godot-mcp-validate-"));
   fs.writeFileSync(path.join(root, "project.godot"), "[application]\nconfig/name=\"Validate\"\n");
   fs.mkdirSync(path.join(root, "scripts"));
   fs.writeFileSync(path.join(root, "scripts", "main.gd"), "extends Node\n");

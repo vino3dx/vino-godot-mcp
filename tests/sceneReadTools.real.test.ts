@@ -7,7 +7,7 @@
 //      instanceScene 应等于引擎的 scene_file_path,且子场景内部节点不得被展开进本文件。
 //
 // 约定:真实测试只读环境变量 GODOT_BIN(测试运行时临时设置,授权路径),未设置则整组 skip。
-// 所有产物(引擎 .godot/ 缓存、`.godot-ai-mcp/` API dump 缓存)都落在 mkdtemp 出来的临时目录里。
+// 所有产物(引擎 .godot/ 缓存、`.vino-godot-mcp/` API dump 缓存)都落在 mkdtemp 出来的临时目录里。
 // 调试用逃生口:T7_KEEP=1 时保留临时目录。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -195,7 +195,7 @@ test("real: scene_get_node_info 的继承链/属性/信号/枚举与引擎 Class
   const cached = ok(await host.callTool("scene_get_node_info", { nodeType: "Sprite2D" }));
   assert.equal((cached["source"] as { fromCache: boolean }).fromCache, true);
   const cacheFile = (cached["source"] as { cacheFile: string }).cacheFile;
-  assert.ok(cacheFile.startsWith(path.join(dir, ".godot-ai-mcp", "extension-api")), cacheFile);
+  assert.ok(cacheFile.startsWith(path.join(dir, ".vino-godot-mcp", "extension-api")), cacheFile);
   assert.ok(fs.existsSync(cacheFile), `缓存文件不存在: ${cacheFile}`);
   assert.ok(fs.readFileSync(cacheFile, "utf8").length > 1_000_000, "缓存文件应是引擎原始 dump(数 MB)");
 });

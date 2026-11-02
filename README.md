@@ -1,4 +1,7 @@
-# godot-ai-mcp
+# Vino Godot MCP
+
+> Internal project name: `vino-godot-mcp` · Maintained by **Vino Studios**
+
 ![img](./assets/Cover.jpg)
 
 [![npm version](https://img.shields.io/npm/v/vino-godot-mcp.svg)](https://www.npmjs.com/package/vino-godot-mcp)
@@ -42,15 +45,13 @@ Runtime Adapter only calls Godot CLI when engine-dependent capabilities are requ
 
 Requires Node.js >= 22.
 
-Three names are involved. Mixing them up is the most common reason an install "seems" broken:
+The npm package, the CLI command and the MCP server name are all `vino-godot-mcp` — one name to remember:
 
 | Thing | Value |
 |---|---|
 | npm package (what you install) | `vino-godot-mcp` |
-| CLI command (what you run) | `godot-ai-mcp` — from the `bin` field in `package.json` |
-| MCP server name (what `initialize` reports) | `godot-ai-mcp` |
-
-`vino-godot-mcp` is **not** an executable; only `godot-ai-mcp` is.
+| CLI command (what you run) | `vino-godot-mcp` — from the `bin` field in `package.json` |
+| MCP server name (what `initialize` reports) | `vino-godot-mcp` |
 
 **Option 1 — install into a project (local):**
 
@@ -71,13 +72,13 @@ added 4 packages, and audited 5 packages in 5s
 found 0 vulnerabilities
 ```
 
-**Option 2 — install globally (puts the `godot-ai-mcp` command on your PATH):**
+**Option 2 — install globally (puts the `vino-godot-mcp` command on your PATH):**
 
 ```bash
 npm i -g vino-godot-mcp
 ```
 
-> `npm i -g` writes **nothing** into the current directory. Files go to the global prefix: on Windows `%APPDATA%\npm\node_modules\vino-godot-mcp`, with launchers `%APPDATA%\npm\godot-ai-mcp.cmd` and `.ps1`. A still-empty project folder does not mean the install failed.
+> `npm i -g` writes **nothing** into the current directory. Files go to the global prefix: on Windows `%APPDATA%\npm\node_modules\vino-godot-mcp`, with launchers `%APPDATA%\npm\vino-godot-mcp.cmd` and `.ps1`. A still-empty project folder does not mean the install failed.
 
 **Option 3 — run once without installing:**
 
@@ -85,15 +86,15 @@ npm i -g vino-godot-mcp
 npx -y vino-godot-mcp
 ```
 
-`npx` resolves the *package* name; the command produced by a global install is `godot-ai-mcp`.
+`npx` resolves the *package* name; a global install puts the same `vino-godot-mcp` command on your `PATH`.
 
 #### Verify the installation (Windows)
 
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # registered globally?
-where.exe godot-ai-mcp               # launcher on PATH?
-godot-ai-mcp --version               # -> godot-ai-mcp 1.2.0
-godot-ai-mcp --help                  # usage, plus the stdio note below
+where.exe vino-godot-mcp               # launcher on PATH?
+vino-godot-mcp --version               # -> vino-godot-mcp 1.2.0
+vino-godot-mcp --help                  # usage, plus the stdio note below
 ```
 
 `--version` and `--help` print to stdout and exit immediately; they never start the server, so they are safe smoke tests. Both read the version from `package.json`.
@@ -103,10 +104,10 @@ godot-ai-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.0" listening on stdio, 55 tools exposed
 ```
 
-to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `GODOT_AI_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
+to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `VINO_GODOT_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
 
 ### MCP Client Configuration (npm)
 
@@ -115,25 +116,25 @@ Add this to your AI client's MCP config (`.cursor/mcp.json`, CodeBuddy, Cline, �
 ```json
 {
   "mcpServers": {
-    "godot-ai-mcp": {
+    "vino-godot-mcp": {
       "command": "npx",
       "args": ["-y", "vino-godot-mcp"],
       "env": {
         "GODOT_PATH": "<absolute path to the Godot console executable>",
-        "GODOT_AI_MCP_LOG": "debug"
+        "VINO_GODOT_MCP_LOG": "debug"
       }
     }
   }
 }
 ```
 
-> If you installed globally, skip `npx`: use `"command": "godot-ai-mcp"` and drop `args`. Both forms launch the same stdio server.
+> If you installed globally, skip `npx`: use `"command": "vino-godot-mcp"` and drop `args`. Both forms launch the same stdio server.
 
 | Environment variable | Required | Meaning |
 |---|---|---|
 | `GODOT_PATH` | only for `runtime_*` tools | Absolute path to the Godot CLI. Tried first, `PATH` second (`src/godot/cli.ts`). A non-existent path fails loudly with `GODOT_NOT_FOUND` instead of silently falling back. |
-| `GODOT_AI_MCP_GROUPS` | no | Comma-separated domain filter exposing fewer tools, e.g. `project,shader` (`src/mcp/registry/toolRegistry.ts`). |
-| `GODOT_AI_MCP_LOG` | no | `debug` / `info` / `warn` / `error`; default `info` (`src/core/logger.ts`). |
+| `VINO_GODOT_MCP_GROUPS` | no | Comma-separated domain filter exposing fewer tools, e.g. `project,shader` (`src/mcp/registry/toolRegistry.ts`). |
+| `VINO_GODOT_MCP_LOG` | no | `debug` / `info` / `warn` / `error`; default `info` (`src/core/logger.ts`). |
 
 > **Windows note**: if your client cannot find `npx`, use `"command": "npx.cmd"`, or `"command": "cmd"` with `"args": ["/c", "npx", "-y", "vino-godot-mcp"]`.
 
@@ -181,14 +182,14 @@ Local-build client config (instead of `npx`):
 ```json
 {
   "mcpServers": {
-    "godot-ai-mcp": {
+    "vino-godot-mcp": {
       "command": "node",
       "args": [
-        "D:/Dev/godot-ai-mcp/dist/src/index.js"
+        "D:/Dev/vino-godot-mcp/dist/src/index.js"
       ],
       "env": {
         "GODOT_PATH": "E:/Program Files/Godot Engine/Godot_v4.6.3-stable_win64.exe/Godot_v4.6.3-stable_win64_console.exe",
-        "GODOT_AI_MCP_LOG": "debug"
+        "VINO_GODOT_MCP_LOG": "debug"
       }
     }
   }
@@ -207,7 +208,7 @@ Local-build client config (instead of `npx`):
 
 **Tool Matrix**
 
-The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `godot-ai-mcp --help` report the live count, and `GODOT_AI_MCP_GROUPS` can expose a subset (`project,shader`). No count is duplicated here.
+The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `vino-godot-mcp --help` report the live count, and `VINO_GODOT_MCP_GROUPS` can expose a subset (`project,shader`). No count is duplicated here.
 
 | Domain | Tools |
 |--------|-------|
@@ -221,7 +222,7 @@ The single source of truth is `allTools` in `src/tools/index.ts`; the startup lo
 | Class | `class_get_info`, `class_search`, `class_validate_member` |
 | Asset | `asset_list`, `asset_get_info` |
 
-> Tools that need authoritative class info (e.g. `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.godot-ai-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`.
+> Tools that need authoritative class info (e.g. `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.vino-godot-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`.
 
 ### Architecture & Documentation
 
@@ -259,15 +260,13 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 需要 Node.js >= 22。
 
-这里涉及三个名字，混淆它们是最常见的“看起来没装好”的原因：
+npm 包名、CLI 命令名与 MCP 服务名统一为 `vino-godot-mcp`，只需记一个名字：
 
 | 对象 | 值 |
 |---|---|
 | npm 包名（安装什么） | `vino-godot-mcp` |
-| CLI 命令名（运行什么） | `godot-ai-mcp` —— 来自 `package.json` 的 `bin` 字段 |
-| MCP 服务名（`initialize` 上报的名字） | `godot-ai-mcp` |
-
-`vino-godot-mcp` 本身**不是**可执行命令，只有 `godot-ai-mcp` 是。
+| CLI 命令名（运行什么） | `vino-godot-mcp` —— 来自 `package.json` 的 `bin` 字段 |
+| MCP 服务名（`initialize` 上报的名字） | `vino-godot-mcp` |
 
 **方式一 —— 安装到项目（本地）：**
 
@@ -288,13 +287,13 @@ added 4 packages, and audited 5 packages in 5s
 found 0 vulnerabilities
 ```
 
-**方式二 —— 全局安装（把 `godot-ai-mcp` 命令放进 PATH）：**
+**方式二 —— 全局安装（把 `vino-godot-mcp` 命令放进 PATH）：**
 
 ```bash
 npm i -g vino-godot-mcp
 ```
 
-> `npm i -g` **不会**往当前目录写任何文件。包会落在全局前缀：Windows 上是 `%APPDATA%\npm\node_modules\vino-godot-mcp`，并生成启动脚本 `%APPDATA%\npm\godot-ai-mcp.cmd` 与 `.ps1`。所以当前项目目录仍然是空的，不代表安装失败。
+> `npm i -g` **不会**往当前目录写任何文件。包会落在全局前缀：Windows 上是 `%APPDATA%\npm\node_modules\vino-godot-mcp`，并生成启动脚本 `%APPDATA%\npm\vino-godot-mcp.cmd` 与 `.ps1`。所以当前项目目录仍然是空的，不代表安装失败。
 
 **方式三 —— 不安装，直接运行一次：**
 
@@ -302,15 +301,15 @@ npm i -g vino-godot-mcp
 npx -y vino-godot-mcp
 ```
 
-`npx` 解析的是*包名*；全局安装后得到的命令是 `godot-ai-mcp`。
+`npx` 解析的是*包名*；全局安装后得到的命令是 `vino-godot-mcp`。
 
 #### 安装验证（Windows）
 
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # 全局是否已登记？
-where.exe godot-ai-mcp               # 启动脚本是否在 PATH 上？
-godot-ai-mcp --version               # 输出：godot-ai-mcp 1.2.0
-godot-ai-mcp --help                  # 用法说明 + 下面的 stdio 提示
+where.exe vino-godot-mcp               # 启动脚本是否在 PATH 上？
+vino-godot-mcp --version               # 输出：vino-godot-mcp 1.2.0
+vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 ```
 
 `--version` 与 `--help` 输出到 stdout 后立即退出，不会启动服务，可以放心当作自检命令；版本号从 `package.json` 读取。
@@ -320,10 +319,10 @@ godot-ai-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[godot-ai-mcp] INFO MCP server "godot-ai-mcp@1.2.0" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.0" listening on stdio, 55 tools exposed
 ```
 
-然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`GODOT_AI_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
+然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`VINO_GODOT_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
 
 ### 在 AI 客户端中配置（npm）
 
@@ -332,25 +331,25 @@ godot-ai-mcp --help                  # 用法说明 + 下面的 stdio 提示
 ```json
 {
   "mcpServers": {
-    "godot-ai-mcp": {
+    "vino-godot-mcp": {
       "command": "npx",
       "args": ["-y", "vino-godot-mcp"],
       "env": {
         "GODOT_PATH": "<你的 Godot 控制台版可执行文件的绝对路径>",
-        "GODOT_AI_MCP_LOG": "debug"
+        "VINO_GODOT_MCP_LOG": "debug"
       }
     }
   }
 }
 ```
 
-> 如果已经全局安装，可以不用 `npx`：把 `"command"` 改成 `"godot-ai-mcp"` 并删掉 `args`。两种写法拉起的是同一个 stdio 服务。
+> 如果已经全局安装，可以不用 `npx`：把 `"command"` 改成 `"vino-godot-mcp"` 并删掉 `args`。两种写法拉起的是同一个 stdio 服务。
 
 | 环境变量 | 是否必需 | 说明 |
 |---|---|---|
 | `GODOT_PATH` | 仅 `runtime_*` 类工具需要 | Godot CLI 的绝对路径。优先读取它，其次在 `PATH` 中查找（`src/godot/cli.ts`）。路径不存在时会直接报 `GODOT_NOT_FOUND`，不会静默回退到 `PATH`。 |
-| `GODOT_AI_MCP_GROUPS` | 否 | 逗号分隔的领域过滤，只向客户端暴露部分工具，例如 `project,shader`（`src/mcp/registry/toolRegistry.ts`）。 |
-| `GODOT_AI_MCP_LOG` | 否 | `debug` / `info` / `warn` / `error`，默认 `info`（`src/core/logger.ts`）。 |
+| `VINO_GODOT_MCP_GROUPS` | 否 | 逗号分隔的领域过滤，只向客户端暴露部分工具，例如 `project,shader`（`src/mcp/registry/toolRegistry.ts`）。 |
+| `VINO_GODOT_MCP_LOG` | 否 | `debug` / `info` / `warn` / `error`，默认 `info`（`src/core/logger.ts`）。 |
 
 > **Windows 提示**：如果客户端找不到 `npx`，可改为 `"command": "npx.cmd"`，或用 `"command": "cmd"` 搭配 `"args": ["/c", "npx", "-y", "vino-godot-mcp"]`。
 
@@ -398,14 +397,14 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 ```json
 {
   "mcpServers": {
-    "godot-ai-mcp": {
+    "vino-godot-mcp": {
       "command": "node",
       "args": [
-        "D:/Dev/godot-ai-mcp/dist/src/index.js"
+        "D:/Dev/vino-godot-mcp/dist/src/index.js"
       ],
       "env": {
         "GODOT_PATH": "E:/Program Files/Godot Engine/Godot_v4.6.3-stable_win64.exe/Godot_v4.6.3-stable_win64_console.exe",
-        "GODOT_AI_MCP_LOG": "debug"
+        "VINO_GODOT_MCP_LOG": "debug"
       }
     }
   }
@@ -424,7 +423,7 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 
 **当前工具矩阵**
 
-唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `godot-ai-mcp --help` 会报告实时数量，`GODOT_AI_MCP_GROUPS` 可只暴露部分领域（如 `project,shader`）。此处不再重复硬编码数量。
+唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `vino-godot-mcp --help` 会报告实时数量，`VINO_GODOT_MCP_GROUPS` 可只暴露部分领域（如 `project,shader`）。此处不再重复硬编码数量。
 
 | 领域 | 工具 |
 |------|------|
@@ -438,7 +437,7 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 | Class | `class_get_info`、`class_search`、`class_validate_member` |
 | Asset | `asset_list`、`asset_get_info` |
 
-> 需要权威类信息的工具（如 `scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.godot-ai-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。
+> 需要权威类信息的工具（如 `scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.vino-godot-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。
 
 ### 项目架构与文档
 

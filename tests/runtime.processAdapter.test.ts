@@ -19,7 +19,7 @@ test("ProcessAdapter exposes PID, independent streams, exit and stop", async () 
 });
 
 test("ProcessAdapter reports startup failure", async () => {
-  const child = new ProcessAdapter().start("godot-ai-mcp-does-not-exist", [], {});
+  const child = new ProcessAdapter().start("vino-godot-mcp-does-not-exist", [], {});
   const errorPromise = new Promise<Error>((resolve) => child.onError(resolve));
   await assert.rejects(child.spawned, (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT");
   const error = await errorPromise;

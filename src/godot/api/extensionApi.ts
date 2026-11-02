@@ -3,7 +3,7 @@
 // 为什么选它:它是**唯一**由引擎提供、无需 Godot 工程、可离线缓存的全量 ClassDB 快照
 // (4.6.3 实测:6 768 977 B、1023 个类、退出码 0、stdout 只有横幅)。
 //
-// 已核实(2026-10-12,真实 4.6.3 产物;详见本仓 .godot-ai-mcp 缓存与 tests/sceneReadTools.real.test.ts):
+// 已核实(2026-10-12,真实 4.6.3 产物;详见本仓 .vino-godot-mcp 缓存与 tests/sceneReadTools.real.test.ts):
 //   - 顶层键 header / builtin_class_sizes / builtin_class_member_offsets / global_constants / global_enums /
 //     utility_functions / builtin_classes / classes / singletons / native_structures。
 //   - 每个类:name、is_refcounted、is_instantiable、inherits、api_type("core"|"editor")、methods、properties。

@@ -116,11 +116,11 @@ test("captureScreenshot 成功:返回路径/尺寸/大小/耗时,脚本被清理
   assert.equal(res.renderSize.height, 720);
   assert.deepEqual(res.outputSize, { width: 1280, height: 720 });
   assert.equal(res.fileSize, 24);
-  assert.ok(res.filePath.startsWith(path.join(os.tmpdir(), "godot-ai-mcp", "screenshots")));
+  assert.ok(res.filePath.startsWith(path.join(os.tmpdir(), "vino-godot-mcp", "screenshots")));
   assert.ok(fs.existsSync(res.filePath));
   assert.equal(res.imageBase64, undefined);
   // 脚本文件已清理:临时目录下不应残留 capture-*.gd
-  const scriptDir = path.join(os.tmpdir(), "godot-ai-mcp");
+  const scriptDir = path.join(os.tmpdir(), "vino-godot-mcp");
   const leftovers = fs.readdirSync(scriptDir).filter((f) => f.startsWith("capture-") && f.endsWith(".gd"));
   assert.deepEqual(leftovers, []);
   // 命令串包含 --script 与 -- 分隔符
@@ -206,7 +206,7 @@ test("runtime_capture_screenshot 经 ToolHost:成对校验 + 成功信封含 ima
   const ok = await host.callTool("runtime_capture_screenshot", { includeImage: true });
   assert.equal(ok.ok, true);
   const data = (ok as { ok: true; data: { filePath: string; outputSize: { width: number }; fileSize: number } }).data;
-  assert.match(data.filePath, /godot-ai-mcp[/\\]screenshots/);
+  assert.match(data.filePath, /vino-godot-mcp[/\\]screenshots/);
   assert.equal(data.outputSize.width, 1280);
   assert.equal(data.fileSize, 24);
   assert.equal((ok as { ok: true; image?: { mimeType: string } }).image?.mimeType, "image/png");

@@ -45,9 +45,9 @@ async function connect(): Promise<{ client: Client; call: (name: string, args?: 
     args: [SERVER_ENTRY],
     cwd: path.resolve(SERVER_ENTRY, "../.."),
     stderr: "pipe",
-    env: { ...getDefaultEnvironment(), GODOT_AI_MCP_LOG: "warn" },
+    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "warn" },
   });
-  const client = new Client({ name: "godot-ai-mcp-editor-e2e", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
+  const client = new Client({ name: "vino-godot-mcp-editor-e2e", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
   await client.connect(transport);
   return {
     client,
@@ -258,8 +258,8 @@ test("E2 editor bridge: identity, game-not-running, scene/tree/node/layout match
 
   // --- 6) descriptor 属于别的项目 -> EDITOR_INSTANCE_MISMATCH ---
   const otherProject = makeTempProject(t, "mcp-editor-other-");
-  fs.mkdirSync(path.join(otherProject, ".godot-ai-mcp"), { recursive: true });
-  fs.copyFileSync(path.join(PROJECT, ".godot-ai-mcp", "bridge.json"), path.join(otherProject, ".godot-ai-mcp", "bridge.json"));
+  fs.mkdirSync(path.join(otherProject, ".vino-godot-mcp"), { recursive: true });
+  fs.copyFileSync(path.join(PROJECT, ".vino-godot-mcp", "bridge.json"), path.join(otherProject, ".vino-godot-mcp", "bridge.json"));
   const mismatch = await call("editor_get_scene", { projectPath: otherProject });
   assert.equal(codeOf(mismatch), "EDITOR_INSTANCE_MISMATCH");
   assert.equal(normalize(String(mismatch.error!.details!["editorProjectPath"])), normalize(PROJECT));

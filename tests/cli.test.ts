@@ -37,11 +37,11 @@ test("parseCliArgs: version / help / serve / unknown", () => {
   assert.deepEqual(parseCliArgs(["list"]), { kind: "unknown", arg: "list" });
 });
 
-test("version comes from package.json, help mentions both names", () => {
-  assert.equal(CLI_NAME, "godot-ai-mcp");
+test("version comes from package.json, help mentions the package name", () => {
+  assert.equal(CLI_NAME, "vino-godot-mcp");
   assert.equal(VERSION, PKG.version);
   assert.equal(versionText(), `${CLI_NAME} ${PKG.version}`);
-  // 包名与命令名不同,帮助文本必须同时给出,否则用户会以为没装好。
+  // 命令名与 npm 包名一致(均来自 package.json),帮助文本仍须给出包名与安装方式。
   assert.equal(CLI_NAME, Object.keys(PKG.bin)[0]);
   assert.ok(helpText().includes(PKG.name), "help must mention the npm package name");
   assert.ok(helpText().includes("--version"));
@@ -55,7 +55,7 @@ test("--version prints CLI name + package.json version to stdout and exits 0", (
   const r = run(["--version"]);
   assert.equal(r.timedOut, false);
   assert.equal(r.status, 0);
-  assert.equal(r.stdout, `godot-ai-mcp ${PKG.version}\n`);
+  assert.equal(r.stdout, `vino-godot-mcp ${PKG.version}\n`);
   assert.equal(r.stderr, "", "version output must not leak logs to stderr");
 });
 
@@ -71,7 +71,7 @@ test("--help prints usage to stdout and exits 0", () => {
   const r = run(["--help"]);
   assert.equal(r.timedOut, false);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^godot-ai-mcp \d+\.\d+\.\d+\n/);
+  assert.match(r.stdout, /^vino-godot-mcp \d+\.\d+\.\d+\n/);
   assert.match(r.stdout, /Usage:/);
   assert.match(r.stdout, /--version, -v/);
   assert.match(r.stdout, /--help, -h/);
