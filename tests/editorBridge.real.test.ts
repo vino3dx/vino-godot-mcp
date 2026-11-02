@@ -7,6 +7,8 @@
 //   GODOT_EDITOR_BRIDGE=1    允许运行(否则整组 skip)
 //   EXPECT_EDITOR_PID=<pid>  godot_test 那个 Editor 的 PID(核对 descriptor 与插件自报)
 //   MCP_EXPECT_UNSAVED=1     额外断言:Editor 里有**未保存**修改,磁盘 .tscn 仍是旧值
+//   MCP_TEST_PROJECT=<path>  可选:改用另一个等价项目副本(用于在独立 Editor 实例上跑未保存态,
+//                            默认仍是仓库内的 godot_test)
 //
 // 只读:所有调用都是 read-only 工具,不写场景、不保存。
 import { test } from "node:test";
@@ -20,7 +22,9 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.resolve(HERE, "../src/index.js");
-const PROJECT = path.resolve(HERE, "..", "..", "godot_test");
+const PROJECT = process.env["MCP_TEST_PROJECT"]
+  ? path.resolve(process.env["MCP_TEST_PROJECT"])
+  : path.resolve(HERE, "..", "..", "godot_test");
 const SCENE = "res://scenes/mcp_test.tscn";
 
 const ENABLED = process.env["GODOT_EDITOR_BRIDGE"] === "1";

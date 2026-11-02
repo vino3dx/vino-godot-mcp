@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vino3dx/vino-godot-mcp",
+  "title": "Vino Godot MCP",
+  "description": "Semantic operation MCP server for the Godot engine.",
+  "repository": {
+    "url": "https://github.com/vino3dx/vino-godot-mcp",
+    "source": "github"
+  },
+  "version": "1.2.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "vino-godot-mcp",
+      "version": "1.2.1",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -2,6 +2,7 @@
   "name": "vino-godot-mcp",
   "version": "1.2.1",
   "description": "Vino Godot MCP — semantic operation MCP server for the Godot engine (Vino Studios)",
+  "mcpName": "io.github.vino3dx/vino-godot-mcp",
   "type": "module",
   "bin": {
     "vino-godot-mcp": "./dist/src/index.js"
