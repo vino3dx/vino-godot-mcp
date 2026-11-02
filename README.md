@@ -2,7 +2,7 @@
 
 > Internal project name: `vino-godot-mcp` · Maintained by **Vino Studios**
 
-![img](./assets/Cover.jpg)
+![img](./assets/cover.webp)
 
 [![npm version](https://img.shields.io/npm/v/vino-godot-mcp.svg)](https://www.npmjs.com/package/vino-godot-mcp)
 [![Godot](https://img.shields.io/badge/Godot-4.6.3+-478CBF?logo=godotengine&logoColor=white)](https://godotengine.org/)
@@ -239,6 +239,15 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 | `docs/ARCHITECTURE.md` | Layered architecture & MCP protocol details |
 | `docs/concurrency.md` | File locks & runtime queue design |
 
+### Contact
+
+| Channel | Link |
+|---|---|
+| GitHub | https://github.com/vino3dx |
+| Blog | https://vinofx.com/ |
+| Email | vino3dx@gmail.com |
+| Bilibili | https://space.bilibili.com/250546761?spm_id_from=333.1007.0.0 |
+
 ---
 
 <a id="中文"></a>
@@ -453,6 +462,15 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 | `docs/AGENTS.md` | 架构禁令与质量红线 |
 | `docs/ARCHITECTURE.md` | 分层架构细则与 MCP 协议适配说明 |
 | `docs/concurrency.md` | 文件并发锁与运行队列设计 |
+
+### 联系方式
+
+| 渠道 | 地址 |
+|---|---|
+| GitHub | https://github.com/vino3dx |
+| 博客 | https://vinofx.com/ |
+| 邮箱 | vino3dx@gmail.com |
+| 哔哩哔哩 | https://space.bilibili.com/250546761?spm_id_from=333.1007.0.0 |
 
 ---
 
