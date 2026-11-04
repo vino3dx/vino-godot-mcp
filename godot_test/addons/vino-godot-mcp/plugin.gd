@@ -36,6 +36,16 @@ const MAX_STRING_CHARS := 4096
 const SOURCE_EDITOR := "Godot Editor Plugin (EditorInterface.get_edited_scene_root)"
 const DIRTY_REASON := "EditorInterface exposes no scene-dirty query in Godot 4.6; is_dirty is reported as null instead of guessed"
 
+# 上下文采集：Bridge 与「上下文」页面共用同一套 collectors，避免两套口径。
+const ProjectCollector := preload("collectors/project_collector.gd")
+const SceneCollector := preload("collectors/scene_collector.gd")
+const NodeCollector := preload("collectors/node_collector.gd")
+const SelectionCollector := preload("collectors/selection_collector.gd")
+
+const SETTING_AUTO_CONNECT := "vino_godot_mcp/auto_connect"
+const SETTING_LOG_LEVEL := "vino_godot_mcp/log_level"
+const LOG_LEVELS := ["debug", "info", "warn"]
+
 var server := TCPServer.new()
 var peer: StreamPeerTCP
 var input := PackedByteArray()
@@ -46,12 +56,14 @@ var project_id := ""
 var descriptor_path := ""
 var port := DEFAULT_PORT
 var dock: Control
+var tabs: TabContainer
+var getting_started: Control
+var context_panel: Control
+var settings_panel: Control
 var status_label: Label
 var status_icon: Label
-var details_label: Label
-var language_select: OptionButton
 var reconnect_button: Button
-var language := "zh"
+var log_level := "info"
 const MENU_STATUS := "Vino Godot MCP / Bridge Status"
 const MENU_PROJECT_PATH := "Vino Godot MCP / Copy Project Path"
 const MENU_DASHBOARD := "Vino Godot MCP / Open Dashboard"
@@ -62,38 +74,121 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_STATUS, Callable(self, "_menu_status"))
 	add_tool_menu_item(MENU_PROJECT_PATH, Callable(self, "_menu_project_path"))
 	add_tool_menu_item(MENU_DASHBOARD, Callable(self, "_toggle_dashboard"))
+	log_level = str(ProjectSettings.get_setting(SETTING_LOG_LEVEL, "info"))
 	port = int(ProjectSettings.get_setting("vino_godot_mcp/bridge_port", DEFAULT_PORT))
 	token = _random_token()
 	session_id = "%s-%s" % [Time.get_unix_time_from_system(), randi()]
 	instance_id = session_id
 	project_id = str(ProjectSettings.get_setting("application/config/name", "unknown"))
-	var err := server.listen(port, "127.0.0.1")
-	if err != OK:
-		push_error("Vino Godot MCP Bridge failed to listen on 127.0.0.1:%d (%s)" % [port, error_string(err)])
-		return
 	descriptor_path = ProjectSettings.globalize_path("res://.vino-godot-mcp/bridge.json")
-	DirAccess.make_dir_recursive_absolute(descriptor_path.get_base_dir())
-	_write_descriptor()
+	if is_auto_connect_enabled():
+		start_bridge()
+	else:
+		_log("自动连接已关闭，Bridge 未监听", "info")
+		_update_dashboard()
 
 func _exit_tree() -> void:
 	remove_tool_menu_item(MENU_STATUS)
 	remove_tool_menu_item(MENU_PROJECT_PATH)
 	remove_tool_menu_item(MENU_DASHBOARD)
+	for panel in [getting_started, context_panel, settings_panel]:
+		if panel != null and is_instance_valid(panel) and panel.has_method("shutdown"):
+			panel.shutdown()
+	getting_started = null
+	context_panel = null
+	settings_panel = null
 	if dock:
 		remove_control_from_docks(dock)
 		dock.queue_free()
 		dock = null
+	tabs = null
+	stop_bridge()
+
+# ---------------------------------------------------------------- Bridge 生命周期 / 设置项
+
+func is_auto_connect_enabled() -> bool:
+	return bool(ProjectSettings.get_setting(SETTING_AUTO_CONNECT, true))
+
+func start_bridge() -> bool:
+	if server.is_listening():
+		return true
+	var err := server.listen(port, "127.0.0.1")
+	if err != OK:
+		push_error("Vino Godot MCP Bridge 无法监听 127.0.0.1:%d（%s）" % [port, error_string(err)])
+		_update_dashboard()
+		return false
+	DirAccess.make_dir_recursive_absolute(descriptor_path.get_base_dir())
+	_write_descriptor()
+	_log("Bridge 已监听 127.0.0.1:%d" % port, "info")
+	_update_dashboard()
+	return true
+
+func stop_bridge() -> void:
 	if peer:
 		peer.disconnect_from_host()
 		peer = null
-	server.stop()
-	if descriptor_path != "":
+	if server.is_listening():
+		server.stop()
+	if descriptor_path != "" and FileAccess.file_exists(descriptor_path):
 		DirAccess.remove_absolute(descriptor_path)
+	_update_dashboard()
+
+func reconnect_bridge() -> void:
+	stop_bridge()
+	start_bridge()
+	_log("Bridge 重新连接", "info")
+
+func set_auto_connect(enabled: bool) -> void:
+	ProjectSettings.set_setting(SETTING_AUTO_CONNECT, enabled)
+	ProjectSettings.save()
+	if enabled:
+		start_bridge()
+	else:
+		stop_bridge()
+
+func set_log_level(level: String) -> void:
+	if not LOG_LEVELS.has(level):
+		level = "info"
+	log_level = level
+	ProjectSettings.set_setting(SETTING_LOG_LEVEL, level)
+	ProjectSettings.save()
+
+func get_bridge_state() -> Dictionary:
+	var exists := descriptor_path != "" and FileAccess.file_exists(descriptor_path)
+	return {
+		"listening": server.is_listening(),
+		"host": "127.0.0.1",
+		"port": port,
+		"protocolVersion": PROTOCOL_VERSION,
+		"sessionId": session_id,
+		"descriptorPath": descriptor_path if exists else "",
+		"descriptorExists": exists,
+		"peerConnected": peer != null,
+		"autoConnect": is_auto_connect_enabled(),
+		"logLevel": log_level,
+	}
+
+func get_plugin_info() -> Dictionary:
+	var info := {"name": "Vino Godot MCP", "version": "", "description": "", "id": "vino-godot-mcp"}
+	var script = get_script()
+	if script is Script:
+		var cfg_path: String = str(script.resource_path).get_base_dir().path_join("plugin.cfg")
+		var cfg := ConfigFile.new()
+		if cfg.load(cfg_path) == OK:
+			info["name"] = str(cfg.get_value("plugin", "name", info["name"]))
+			info["version"] = str(cfg.get_value("plugin", "version", ""))
+			info["description"] = str(cfg.get_value("plugin", "description", ""))
+	return info
+
+## 日志等级：debug < info < warn。只控制插件自身控制台输出，不影响 MCP Server。
+func _log(message: String, level := "debug") -> void:
+	var order := {"debug": 0, "info": 1, "warn": 2}
+	if int(order.get(level, 0)) < int(order.get(log_level, 1)):
+		return
+	print("[Vino Godot MCP] ", message)
 
 func _menu_status() -> void:
-	var state := "running" if server.is_listening() else "stopped"
 	if status_label:
-		status_label.text = "Bridge: %s" % state.capitalize()
 		_update_dashboard()
 
 func _menu_project_path() -> void:
@@ -106,85 +201,127 @@ func _toggle_dashboard() -> void:
 func _build_dashboard() -> void:
 	dock = VBoxContainer.new()
 	dock.name = "VinoGodotMCP"
-	dock.custom_minimum_size = Vector2(320, 240)
+	# Dock 宽度交给 Godot 编辑器：不设最小宽度，否则窄面板会被强行撑开，挤压主编辑区。
+	dock.custom_minimum_size = Vector2(0, 240)
+	dock.add_theme_constant_override("separation", 6)
+
+	# 标题行：图标 + 名称（紧凑，不放任何会撑宽的控件）。
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 6)
+	dock.add_child(header)
+	var header_icon := TextureRect.new()
+	header_icon.texture = _dock_icon("Godot")
+	header_icon.custom_minimum_size = Vector2(20, 20)
+	header_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	header_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(header_icon)
 	var title := Label.new()
 	title.text = "Vino Godot MCP"
-	title.add_theme_font_size_override("font_size", 18)
-	dock.add_child(title)
-	var language_row := HBoxContainer.new()
-	dock.add_child(language_row)
-	var language_caption := Label.new()
-	language_caption.text = "语言 / Language"
-	language_row.add_child(language_caption)
-	language_select = OptionButton.new()
-	language_select.add_item("简体中文")
-	language_select.add_item("English")
-	language_select.add_item("日本語")
-	language_select.add_item("한국어")
-	language_select.item_selected.connect(_on_language_selected)
-	language_row.add_child(language_select)
-	var status_row := HBoxContainer.new()
+	title.add_theme_font_size_override("font_size", 17)
+	var bold_font := _dock_font("bold")
+	if bold_font != null:
+		title.add_theme_font_override("font", bold_font)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.custom_minimum_size = Vector2.ZERO
+	header.add_child(title)
+
+	# 状态 + 重连放在同一条 HFlowContainer 里：
+	# 窄面板下自动折行，而不是把 Dock 撑到所有控件宽度之和。
+	# 这里不给 Label 开自动换行——自动换行的 Label 会按"最小宽度"算最小高度，
+	# 容器初始宽度很小时高度会异常膨胀，反而把 Dock 撑高。
+	var status_row := HFlowContainer.new()
+	status_row.add_theme_constant_override("h_separation", 6)
+	status_row.add_theme_constant_override("v_separation", 4)
 	dock.add_child(status_row)
 	status_icon = Label.new()
-	status_icon.add_theme_font_size_override("font_size", 22)
+	status_icon.add_theme_font_size_override("font_size", 20)
 	status_row.add_child(status_icon)
 	status_label = Label.new()
+	status_label.custom_minimum_size = Vector2.ZERO
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(status_label)
 	reconnect_button = Button.new()
 	reconnect_button.pressed.connect(_reconnect_bridge)
 	status_row.add_child(reconnect_button)
-	details_label = Label.new()
-	details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	dock.add_child(details_label)
-	var tabs := TabContainer.new()
+
+	# 只保留三个 Tab：开始 / 上下文 / 设置。
+	tabs = TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	dock.add_child(tabs)
-	var service := RichTextLabel.new()
-	service.bbcode_enabled = true
-	service.text = "[b]MCP Service[/b]\nPackage: vino-godot-mcp\nStatus: use npx -y for zero-install startup\nInstall/check: npm i vino-godot-mcp\nConfig: npx -y vino-godot-mcp\n\nGODOT_PATH and GODOT_PROJECT_PATH must point to this Godot installation and project.\nThe service reads .vino-godot-mcp/bridge.json while the editor is open."
-	tabs.add_child(service)
-	tabs.set_tab_title(0, "MCP Service")
-	var docs := RichTextLabel.new()
-	docs.bbcode_enabled = true
-	docs.text = "[b]Quick start[/b]\n1. Enable Vino Godot MCP.\n2. Keep the editor open.\n3. Set GODOT_PROJECT_PATH to this project.\n4. Call editor_get_scene / editor_get_tree from MCP."
-	tabs.add_child(docs)
-	tabs.set_tab_title(1, "Documentation")
+
+	getting_started = _create_page("getting_started.gd", "开始")
+	if getting_started:
+		tabs.add_child(getting_started)
+		tabs.set_tab_title(tabs.get_tab_count() - 1, "开始")
+		tabs.set_tab_icon(tabs.get_tab_count() - 1, _dock_icon("Play"))
+
+	context_panel = _create_page("ui/context_panel.gd", "上下文")
+	if context_panel:
+		tabs.add_child(context_panel)
+		tabs.set_tab_title(tabs.get_tab_count() - 1, "上下文")
+		tabs.set_tab_icon(tabs.get_tab_count() - 1, _dock_icon("Node"))
+		# dock 此时还没进入场景树，页面 _ready 尚未执行：延后注入插件引用。
+		if context_panel.has_method("_attach"):
+			context_panel.call_deferred("_attach", self)
+
+	settings_panel = _create_page("ui/settings_panel.gd", "设置")
+	if settings_panel:
+		tabs.add_child(settings_panel)
+		tabs.set_tab_title(tabs.get_tab_count() - 1, "设置")
+		tabs.set_tab_icon(tabs.get_tab_count() - 1, _dock_icon("Tools"))
+		if settings_panel.has_method("_attach"):
+			settings_panel.call_deferred("_attach", self)
+
+	tabs.current_tab = 0
 	_update_dashboard()
 
-func _on_language_selected(index: int) -> void:
-	language = ["zh", "en", "ja", "ko"][index]
-	_update_dashboard()
+
+## 复用编辑器主题图标/字体；拿不到就返回 null，由调用方降级为纯文本。
+func _dock_icon(icon_name: String) -> Texture2D:
+	if not Engine.is_editor_hint():
+		return null
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_icon(icon_name, "EditorIcons"):
+		return theme.get_icon(icon_name, "EditorIcons")
+	return null
+
+
+func _dock_font(font_name: String) -> Font:
+	if not Engine.is_editor_hint():
+		return null
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_font(font_name, "EditorFonts"):
+		return theme.get_font(font_name, "EditorFonts")
+	return null
+
+
+## 页面脚本按插件实际安装路径加载，避免把 res://addons/vino-godot-mcp/ 写死。
+func _create_page(relative_path: String, label: String) -> Control:
+	var script = get_script()
+	if not script is Script:
+		push_warning("Vino Godot MCP: 无法解析插件脚本路径，跳过「%s」页面。" % label)
+		return null
+	var page_path: String = str(script.resource_path).get_base_dir().path_join(relative_path)
+	if not ResourceLoader.exists(page_path):
+		push_warning("Vino Godot MCP: 找不到 %s，跳过「%s」页面。" % [page_path, label])
+		return null
+	var page_script = load(page_path)
+	if page_script == null:
+		push_warning("Vino Godot MCP: %s 加载失败，跳过「%s」页面。" % [page_path, label])
+		return null
+	return page_script.new()
 
 func _reconnect_bridge() -> void:
-	if peer:
-		peer.disconnect_from_host()
-		peer = null
-	if server.is_listening():
-		server.stop()
-	var err := server.listen(port, "127.0.0.1")
-	if err != OK:
-		push_error("Vino Godot MCP reconnect failed: %s" % error_string(err))
-	_update_dashboard()
-
-func _text(key: String) -> String:
-	var translations := {
-		"zh": {"working": "vino-godot-mcp 正在工作", "stopped": "vino-godot-mcp 未连接", "reconnect": "重新连接", "details": "Godot：%s\n项目：%s\n路径：%s\n地址：127.0.0.1\n端口：%d\n协议：%d\nSession：%s"},
-		"en": {"working": "vino-godot-mcp is working", "stopped": "vino-godot-mcp disconnected", "reconnect": "Reconnect", "details": "Godot: %s\nProject: %s\nPath: %s\nHost: 127.0.0.1\nPort: %d\nProtocol: %d\nSession: %s"},
-		"ja": {"working": "vino-godot-mcp は動作中です", "stopped": "vino-godot-mcp は未接続です", "reconnect": "再接続", "details": "Godot：%s\nプロジェクト：%s\nパス：%s\nホスト：127.0.0.1\nポート：%d\nプロトコル：%d\nセッション：%s"},
-		"ko": {"working": "vino-godot-mcp 동작 중", "stopped": "vino-godot-mcp 연결 안 됨", "reconnect": "다시 연결", "details": "Godot: %s\n프로젝트: %s\n경로: %s\n호스트: 127.0.0.1\n포트: %d\n프로토콜: %d\n세션: %s"}
-	}
-	return translations.get(language, translations["zh"]).get(key, key)
+	reconnect_bridge()
 
 func _update_dashboard() -> void:
-	if not status_label or not details_label:
+	if not status_label or not status_icon:
 		return
 	var working := server.is_listening()
 	status_icon.text = "✓" if working else "✕"
-	status_icon.add_theme_color_override("font_color", Color("65d681") if working else Color("ed6a6a"))
-	status_label.text = _text("working" if working else "stopped")
-	reconnect_button.text = _text("reconnect")
-	details_label.text = _text("details") % [Engine.get_version_info().get("string", "unknown"), ProjectSettings.get_setting("application/config/name", "unknown"), ProjectSettings.globalize_path("res://"), port, PROTOCOL_VERSION, session_id]
+	status_icon.add_theme_color_override("font_color", Color("3fb950") if working else Color("e5534b"))
+	status_label.text = "Bridge 正在监听" if working else "Bridge 未启动"
+	reconnect_button.text = "重新连接"
 
 func _process(_delta: float) -> void:
 	if not server.is_connection_available():
@@ -432,27 +569,9 @@ func _open_scenes() -> Array:
 		out.append(entry)
 	return out
 
+## 与「上下文」页面共用（collectors/selection_collector.gd 的 Bridge 格式）。
 func _selection() -> Dictionary:
-	var out := {"count": 0, "nodes": []}
-	var selection := EditorInterface.get_selection()
-	if selection == null:
-		return out
-	var nodes := selection.get_selected_nodes()
-	out["count"] = nodes.size()
-	for node in nodes:
-		if node == null or not is_instance_valid(node):
-			out["nodes"].append({"isValid": false})
-			continue
-		var root := EditorInterface.get_edited_scene_root()
-		out["nodes"].append({
-			"isValid": true,
-			"name": str(node.name),
-			"path": _rel_path(root, node),
-			"type": node.get_class(),
-			"objectId": _id(node),
-			"scenePath": node.scene_file_path if node == root else _scene_of(root),
-		})
-	return out
+	return SelectionCollector.collect_bridge(EditorInterface.get_edited_scene_root())
 
 func _scene_of(root: Node) -> String:
 	if root == null:
@@ -490,78 +609,25 @@ func _editor_scene_tree(params: Dictionary) -> Dictionary:
 		return _fail("EDITOR_NODE_NOT_FOUND", "No node matches path '%s' inside the edited scene '%s'" % [node_path, str(root.name)], data)
 	data["objectId"] = _id(start)
 
-	var max_depth := clampi(int(params.get("maxDepth", DEFAULT_MAX_DEPTH)), 0, HARD_MAX_DEPTH)
-	var max_nodes := clampi(int(params.get("maxNodes", DEFAULT_MAX_NODES)), 1, HARD_MAX_NODES)
-	var include_internal := bool(params.get("includeInternal", false))
-	var include_groups := bool(params.get("includeGroups", true))
-
-	var nodes := []
-	var truncated_nodes := false
-	var truncated_depth := false
-	var stack := [{"node": start, "depth": 0}]
-	while not stack.is_empty():
-		var item: Dictionary = stack.pop_back()
-		var node: Node = item["node"]
-		var depth: int = item["depth"]
-		if nodes.size() >= max_nodes:
-			truncated_nodes = true
-			break
-		nodes.append(_describe_node(root, node, depth, include_groups))
-		if depth >= max_depth:
-			if node.get_child_count(include_internal) > 0:
-				truncated_depth = true
-			continue
-		var children := node.get_children(include_internal)
-		for i in range(children.size() - 1, -1, -1):
-			stack.push_back({"node": children[i], "depth": depth + 1})
-
-	data["rootPath"] = _rel_path(root, start)
-	data["startPath"] = _rel_path(root, start)
-	data["nodeCount"] = nodes.size()
-	data["subtreeNodeCount"] = _count_nodes(start, include_internal)
-	data["maxDepth"] = max_depth
-	data["maxNodes"] = max_nodes
-	data["includeInternal"] = include_internal
-	data["truncated"] = truncated_nodes or truncated_depth
-	data["truncatedBy"] = {"maxNodes": truncated_nodes, "maxDepth": truncated_depth}
-	data["nodes"] = nodes
+	# 与「上下文」页面共用同一套节点遍历实现（collectors/node_collector.gd）。
+	var tree := NodeCollector.collect_tree(root, start, params)
+	data["rootPath"] = NodeCollector.rel_path(root, start)
+	data["startPath"] = NodeCollector.rel_path(root, start)
+	data["nodeCount"] = int(tree["nodeCount"])
+	data["subtreeNodeCount"] = int(tree["subtreeNodeCount"])
+	data["maxDepth"] = int(tree["maxDepth"])
+	data["maxNodes"] = int(tree["maxNodes"])
+	data["includeInternal"] = bool(tree["includeInternal"])
+	data["truncated"] = bool(tree["truncated"])
+	data["truncatedBy"] = tree["truncatedBy"]
+	data["nodes"] = tree["nodes"]
 	return data
 
 func _describe_node(root: Node, node: Node, depth: int, include_groups: bool) -> Dictionary:
-	var entry := {
-		"name": str(node.name),
-		"path": _rel_path(root, node),
-		"parentPath": _rel_path(root, node.get_parent()),
-		"depth": depth,
-		"type": node.get_class(),
-		"className": _script_global_name(node),
-		"scriptPath": _script_path(node),
-		"ownerPath": _rel_path(root, node.owner),
-		"uniqueNameInOwner": node.is_unique_name_in_owner(),
-		"instanceId": _id(node),
-		"instanceScenePath": node.scene_file_path,
-		"isInstance": node.scene_file_path != "" and node != root,
-		"childCount": node.get_child_count(),
-		"isInsideTree": node.is_inside_tree(),
-		"isValid": is_instance_valid(node),
-		"context": "editor",
-	}
-	if include_groups:
-		var groups := []
-		for g in node.get_groups():
-			groups.append(str(g))
-		entry["groups"] = groups
-	return entry
+	return NodeCollector.describe_node(root, node, depth, include_groups)
 
 func _count_nodes(start: Node, include_internal: bool) -> int:
-	var total := 0
-	var stack := [start]
-	while not stack.is_empty() and total < HARD_COUNT_NODES:
-		var node: Node = stack.pop_back()
-		total += 1
-		for child in node.get_children(include_internal):
-			stack.push_back(child)
-	return total
+	return NodeCollector.count_nodes(start, include_internal)
 
 # ---------------------------------------------------------------- node info
 
@@ -880,28 +946,13 @@ func _resolve_node(root: Node, path_text: String) -> Node:
 	return root.get_node_or_null(NodePath(text))
 
 func _rel_path(root: Node, node: Node) -> String:
-	if node == null or not is_instance_valid(node):
-		return ""
-	if root == null or not is_instance_valid(root):
-		return str(node.get_path()) if node.is_inside_tree() else ""
-	if node == root:
-		return "."
-	if root.is_ancestor_of(node):
-		return str(root.get_path_to(node))
-	return str(node.get_path()) if node.is_inside_tree() else ""
+	return NodeCollector.rel_path(root, node)
 
 func _script_path(node: Node) -> String:
-	var script = node.get_script()
-	if script is Script:
-		return script.resource_path
-	return ""
+	return NodeCollector.script_path(node)
 
 func _script_global_name(node: Node) -> String:
-	var script = node.get_script()
-	if script is Script:
-		var global_name: String = script.get_global_name()
-		return global_name
-	return ""
+	return NodeCollector.script_global_name(node)
 
 func _vec2(v: Vector2) -> Dictionary:
 	return {"x": v.x, "y": v.y}
@@ -909,9 +960,7 @@ func _vec2(v: Vector2) -> Dictionary:
 # ObjectID 是 int64,超过 JS 安全整数范围(2^53-1)后 JSON 数字会被截断成错误的值。
 # 所以对外一律给十进制字符串;它只在本 Bridge Session 内有效,不是永久 ID。
 func _id(node) -> String:
-	if node == null or not is_instance_valid(node):
-		return ""
-	return str(node.get_instance_id())
+	return NodeCollector.instance_id(node)
 
 func _id_or_null(node):
 	if node == null or not is_instance_valid(node):
