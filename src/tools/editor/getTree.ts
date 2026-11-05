@@ -29,6 +29,7 @@ export const editorGetTree: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
+  dependency: "bridge",
   async handler(args, ctx) {
     const root = ctx.project.resolve(args["projectPath"] as string | undefined);
     const { data, transport } = await ctx.nativeBridge.getEditorTree(root, {

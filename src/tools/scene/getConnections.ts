@@ -4,7 +4,7 @@ export const sceneGetConnections: ToolDefinition<AppContext> = {
   name: "scene_get_connections", domain: "scene",
   description: "Read serialized [connection] entries from a .tscn scene. Filters are applied to normalized scene-root-relative paths; results are static file data, not runtime signal state.",
   inputSchema: { type: "object", required: ["path"], properties: { path: { type: "string" }, projectPath: { type: "string" }, sourcePath: { type: "string" }, targetPath: { type: "string" }, signal: { type: "string" }, method: { type: "string" }, maxResults: { type: "integer", minimum: 1, maximum: 1000, default: 100 } } },
-  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     const read = ctx.file.read(args.projectPath as string | undefined, args.path as string);
     const tree = ctx.scene.getSceneTree(read.text);

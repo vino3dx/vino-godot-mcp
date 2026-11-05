@@ -30,6 +30,7 @@ export const resourceAddOrUpdateExternal: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     const res = args["resource"] as Record<string, unknown>;
     const input: ExternalResourceInput = {

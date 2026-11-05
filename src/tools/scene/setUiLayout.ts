@@ -5,7 +5,7 @@ export const sceneSetUiLayout: ToolDefinition<AppContext> = {
   name: "scene_set_ui_layout", domain: "scene",
   description: "Apply a semantic UI layout patch to a Control node; verify the result with runtime_inspect_ui.",
   inputSchema: { type: "object", required: ["path", "nodePath", "layout"], properties: { path: { type: "string" }, projectPath: { type: "string" }, nodePath: { type: "string" }, layout: { type: "object" }, dryRun: { type: "boolean" }, expectedHash: { type: "string" } } },
-  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     const layout = args.layout as Record<string, unknown>; const changes: unknown[] = [];
     const data = await ctx.file.editText(args.projectPath as string | undefined, args.path as string, (text) => {

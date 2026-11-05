@@ -27,6 +27,7 @@ export const runtimeCaptureScreenshot: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false, idempotent: false },
   runtimeRequired: true,
+  dependency: "godot",
   async handler(args, ctx) {
     const outputWidth = args["outputWidth"] as number | undefined;
     const outputHeight = args["outputHeight"] as number | undefined;

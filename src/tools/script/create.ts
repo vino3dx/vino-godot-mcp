@@ -27,6 +27,7 @@ export const scriptCreate: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     return {
       data: await ctx.file.createText(

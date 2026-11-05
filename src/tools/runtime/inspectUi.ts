@@ -41,6 +41,7 @@ export const runtimeInspectUi: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false, idempotent: true },
   runtimeRequired: true,
+  dependency: "godot",
   async handler(args, ctx) {
     const width = args["width"] as number | undefined;
     const height = args["height"] as number | undefined;

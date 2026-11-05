@@ -11,6 +11,7 @@ export const runtimeGetVersion: ToolDefinition<AppContext> = {
   annotations: { readOnly: true, idempotent: true },
   // 一次性 CLI 探测,不需要常驻 Runtime Adapter;该字段当前只是元数据,不影响执行门槛。
   runtimeRequired: false,
+  dependency: "godot",
   async handler(_args, ctx) {
     return { data: await ctx.godot.getVersion() };
   },

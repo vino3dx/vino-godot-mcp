@@ -6,7 +6,7 @@ export const sceneAnalyzeConnections: ToolDefinition<AppContext> = {
   name: "scene_analyze_connections", domain: "scene",
   description: "Analyze serialized scene signal connections against the static node tree and attached scripts. It never executes scripts and explicitly reports unknown runtime/dynamic cases.",
   inputSchema: { type: "object", required: ["path"], properties: { path: { type: "string" }, projectPath: { type: "string" } } },
-  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     const read = ctx.file.read(args.projectPath as string | undefined, args.path as string);
     const tree = ctx.scene.getSceneTree(read.text); const nodes = new Map(tree.nodes.map((n) => [n.path, n])); const diagnostics: Diagnostic[] = [];

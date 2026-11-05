@@ -26,6 +26,7 @@ export const sceneInstantiateScene: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     const projectPath = args["projectPath"] as string | undefined;
     const scenePath = args["path"] as string;

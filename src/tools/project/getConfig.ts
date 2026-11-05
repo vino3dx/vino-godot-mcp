@@ -16,6 +16,7 @@ export const projectGetConfig: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     const read = ctx.file.read(args["projectPath"] as string | undefined, args["path"] as string);
     return { data: { resPath: read.resPath, hash: read.hash, config: ctx.projectConfig.getConfig(read.text) } };

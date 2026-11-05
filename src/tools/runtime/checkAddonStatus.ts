@@ -35,6 +35,7 @@ export const runtimeCheckAddonStatus: ToolDefinition<AppContext> = {
   annotations: { readOnly: false, idempotent: true },
   // 引擎不可用时静态部分仍要返回,所以不设执行门槛(与 runtime_get_version 同)。
   runtimeRequired: false,
+  dependency: "godot",
   async handler(args, ctx) {
     return {
       data: await ctx.runtime.checkAddonStatus({

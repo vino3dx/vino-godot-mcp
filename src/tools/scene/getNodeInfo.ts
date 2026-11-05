@@ -19,9 +19,12 @@ export const sceneGetNodeInfo: ToolDefinition<AppContext> = {
       projectPath: { type: "string", description: "Project root override; decides where the API cache lives. Defaults to GODOT_PROJECT_PATH, then cwd upward search." },
     },
   },
-  annotations: { readOnly: true, idempotent: true },
+  annotations: { readOnly: false, idempotent: true },
   // 唯一需要引擎的场景类工具:类信息只能由引擎给出(写侧工具仍为 false)。
+  // readOnly=false 的原因与 class_get_info 相同:可能启动 `godot --dump-extension-api`
+  // 并把缓存写进 <projectRoot>/.vino-godot-mcp/。它不修改场景文件本身。
   runtimeRequired: true,
+  dependency: "godot",
   async handler(args, ctx) {
     return { data: await ctx.godotApi.getClassInfo(args["projectPath"] as string | undefined, args["nodeType"] as string) };
   },

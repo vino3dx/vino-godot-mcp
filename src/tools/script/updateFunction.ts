@@ -5,7 +5,7 @@ export const scriptUpdateFunction: ToolDefinition<AppContext> = {
   name: "script_update_function", domain: "script",
   description: "Replace exactly one top-level GDScript function while preserving all text outside its function block.",
   inputSchema: { type: "object", required: ["path", "name", "replacement"], properties: { path: { type: "string" }, name: { type: "string" }, replacement: { type: "string" }, projectPath: { type: "string" }, dryRun: { type: "boolean" }, expectedHash: { type: "string" } } },
-  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     let summary: Record<string, unknown> = {};
     const data = await ctx.file.editText(args.projectPath as string | undefined, args.path as string, (text) => {

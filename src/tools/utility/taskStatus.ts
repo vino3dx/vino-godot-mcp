@@ -8,6 +8,7 @@ export const utilityTaskStatus: ToolDefinition<AppContext> = {
   inputSchema: { type: "object", properties: {} },
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(_args, ctx) {
     return { data: ctx.status.getTaskStatus() };
   },

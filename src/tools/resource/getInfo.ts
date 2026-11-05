@@ -17,6 +17,7 @@ export const resourceGetInfo: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     const read = ctx.file.read(args["projectPath"] as string | undefined, args["path"] as string);
     return { data: { resPath: read.resPath, hash: read.hash, info: ctx.resource.getResourceInfo(read.text) } };

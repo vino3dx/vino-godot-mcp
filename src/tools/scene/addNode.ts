@@ -39,6 +39,7 @@ export const sceneAddNode: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     const properties = (args["properties"] as Array<{ name: string; value: string }> | undefined) ?? [];
     let summary: Record<string, unknown> = {};

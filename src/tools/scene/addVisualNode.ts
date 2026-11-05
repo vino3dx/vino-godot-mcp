@@ -10,7 +10,7 @@ export const sceneAddVisualNode: ToolDefinition<AppContext> = {
     properties: { type: "array", items: { type: "object", required: ["name", "value"], properties: { name: { type: "string" }, value: { type: "string" } } } },
     autoRename: { type: "boolean" }, dryRun: { type: "boolean" }, expectedHash: { type: "string" },
   } },
-  annotations: { readOnly: false, idempotent: false }, runtimeRequired: false,
+  annotations: { readOnly: false, idempotent: false }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     const type = (args.nodeType as string | undefined) ?? "TextureRect";
     const texture = args.texture as string;

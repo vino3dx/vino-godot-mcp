@@ -4,7 +4,7 @@ export const sceneUpdateSignalConnection: ToolDefinition<AppContext> = {
   name: "scene_update_signal_connection", domain: "scene",
   description: "Update exactly one serialized [connection] entry without deleting/recreating the scene connection. The old source/signal/target/method identify the target; new fields are optional, flags are preserved unless explicitly changed.",
   inputSchema: { type: "object", required: ["path", "sourcePath", "signal", "targetPath", "method"], properties: { path: { type: "string" }, projectPath: { type: "string" }, sourcePath: { type: "string" }, signal: { type: "string" }, targetPath: { type: "string" }, method: { type: "string" }, newSourcePath: { type: "string" }, newSignal: { type: "string" }, newTargetPath: { type: "string" }, newMethod: { type: "string" }, flags: { type: "integer", minimum: 0 }, dryRun: { type: "boolean" }, expectedHash: { type: "string" } } },
-  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: false, idempotent: true }, runtimeRequired: false, dependency: "none",
   async handler(args, ctx) {
     let summary: Record<string, unknown> = {};
     const data = await ctx.file.editText(args.projectPath as string | undefined, args.path as string, (text) => {

@@ -26,6 +26,7 @@ export const sceneUpdateNodeProperty: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args, ctx) {
     let summary: Record<string, unknown> = {};
     const data = await ctx.file.editText(

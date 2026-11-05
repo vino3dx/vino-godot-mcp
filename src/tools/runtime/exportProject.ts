@@ -23,6 +23,7 @@ export const runtimeExportProject: ToolDefinition<AppContext> = {
   },
   annotations: { readOnly: false, idempotent: true },
   runtimeRequired: true,
+  dependency: "godot",
   async handler(args, ctx) {
     return {
       data: await ctx.runtime.exportProject({

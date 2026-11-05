@@ -12,7 +12,7 @@ export const projectCapabilities: ToolDefinition<AppContext> = {
     "Fails with BRIDGE_UNAVAILABLE when the editor is closed / plugin disabled / bridge.json missing, BRIDGE_PROTOCOL_ERROR on " +
     "token or protocol mismatch, and EDITOR_INSTANCE_MISMATCH when the descriptor belongs to another project.",
   inputSchema: { type: "object", properties: { projectPath: { type: "string", minLength: 1 } } },
-  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false,
+  annotations: { readOnly: true, idempotent: true }, runtimeRequired: false, dependency: "bridge",
   async handler(args, ctx) {
     const root = ctx.project.resolve(args.projectPath as string | undefined);
     const { data, transport } = await ctx.nativeBridge.getCapabilities(root);

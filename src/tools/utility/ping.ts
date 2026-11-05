@@ -8,6 +8,7 @@ export const utilityPing: ToolDefinition<AppContext> = {
   inputSchema: { type: "object", properties: { echo: { type: "string", description: "Optional text echoed back." } } },
   annotations: { readOnly: true, idempotent: true },
   runtimeRequired: false,
+  dependency: "none",
   async handler(args) {
     return { data: { pong: true, server: "vino-godot-mcp", targetGodot: "4.6.3", node: process.version, echo: args["echo"] ?? null } };
   },
