@@ -9,7 +9,7 @@ import type { ToolDefinition } from "../src/types/index.js";
 
 const quiet = createLogger("error", () => {});
 const t = (name: string, handler: ToolDefinition["handler"]): ToolDefinition => ({
-  name, domain: "utility", description: "d", annotations: { readOnly: true }, runtimeRequired: false, handler,
+  name, domain: "utility", description: "d", annotations: { readOnly: true }, dependency: "none", runtimeRequired: false, handler,
   inputSchema: { type: "object", required: ["x"], properties: { x: { type: "number" } } },
 });
 

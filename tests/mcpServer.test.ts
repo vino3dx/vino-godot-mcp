@@ -79,6 +79,13 @@ test("real MCP client (2025-era handshake): tools/list carries JSON Schema, unif
   assert.equal(schema.type, "object");
   assert.ok(schema.properties && "echo" in schema.properties, "inputSchema must expose the `echo` property");
 
+  // --- 安全注解必须原样上线:客户端靠 readOnlyHint/destructiveHint 决定是否自动放行 ---
+  type Annotated = { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } };
+  const visualDebug = tools.find((x) => x.name === "runtime_visual_debug") as Annotated | undefined;
+  assert.equal(visualDebug?.annotations?.readOnlyHint, false, "runtime_visual_debug runs the project, so it must not be read-only on the wire");
+  const applyChanges = tools.find((x) => x.name === "project_apply_changes") as Annotated | undefined;
+  assert.equal(applyChanges?.annotations?.destructiveHint, true, "project_apply_changes must advertise destructiveHint");
+
   // --- tools/call 正常路径 ---
   const ok = await client.callTool({ name: "utility_ping", arguments: { echo: "hi" } });
   const payload = JSON.parse(textOf(ok)) as { ok: boolean; data: { pong: boolean; echo: string; targetGodot: string } };

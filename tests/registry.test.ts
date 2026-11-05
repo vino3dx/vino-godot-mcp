@@ -4,7 +4,7 @@ import { ToolRegistry, parseEnabledDomains } from "../src/mcp/registry/toolRegis
 import type { ToolDefinition } from "../src/types/index.js";
 
 const mk = (name: string, domain: ToolDefinition["domain"] = "utility"): ToolDefinition => ({
-  name, domain, description: "d", inputSchema: { type: "object" }, annotations: { readOnly: true }, runtimeRequired: false,
+  name, domain, description: "d", inputSchema: { type: "object" }, annotations: { readOnly: true }, dependency: "none", runtimeRequired: false,
   handler: async () => ({ data: 1 }),
 });
 
