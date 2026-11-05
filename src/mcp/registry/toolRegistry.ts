@@ -29,8 +29,5 @@ export class ToolRegistry<Ctx> {
   get size(): number { return this.tools.size; }
 }
 
-/** 解析环境变量 VINO_GODOT_MCP_GROUPS="project,shader"。 */
-export function parseEnabledDomains(raw: string | undefined): Set<ToolDomain> {
-  return new Set((raw ?? "").split(",").map((s) => s.trim()).filter(Boolean) as ToolDomain[]);
-}
+// 配置解析(预设/分组)统一放在 toolSelection.ts,本文件只负责注册与按领域列出。
 
