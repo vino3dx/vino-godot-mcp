@@ -234,10 +234,7 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 | Document | Description |
 |----------|-------------|
-| `docs/HANDOFF.md` | Global handoff notes & progress |
-| `docs/AGENTS.md` | Architecture rules & quality red lines |
-| `docs/ARCHITECTURE.md` | Layered architecture & MCP protocol details |
-| `docs/concurrency.md` | File locks & runtime queue design |
+| `docs/GODOT_NATIVE_BRIDGE.md` | Native read-only Editor Bridge: framing, boundaries, and the not-yet-implemented write channel |
 
 ### Contact
 
@@ -458,10 +455,7 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 | 文档 | 说明 |
 |------|------|
-| `docs/HANDOFF.md` | 全局交接文档与进展记录 |
-| `docs/AGENTS.md` | 架构禁令与质量红线 |
-| `docs/ARCHITECTURE.md` | 分层架构细则与 MCP 协议适配说明 |
-| `docs/concurrency.md` | 文件并发锁与运行队列设计 |
+| `docs/GODOT_NATIVE_BRIDGE.md` | 原生只读编辑器桥：通信帧格式、能力边界、尚未实现的写入通道 |
 
 ### 联系方式
 
