@@ -52,7 +52,7 @@ Required properties:
 - post-operation read-back for writes
 - no protocol/debug output mixed into MCP stdio
 
-The transport is intentionally undecided until an EditorPlugin prototype is tested. Candidate transports are a localhost loopback channel or a project-local IPC mechanism; neither is accepted as implemented yet.
+The transport for the read-only channel is implemented: the EditorPlugin in `godot_test/addons/vino-godot-mcp/` listens on a localhost loopback TCP port and publishes `.vino-godot-mcp/bridge.json` (`host`, `port`, `token`, `sessionId`, `projectId`, `pid`, `projectPath`, `protocolVersion`). The MCP server reads that descriptor and speaks length-prefixed JSON frames. The write channel uses the same framing but is not implemented.
 
 ## Capability layers
 
@@ -62,7 +62,7 @@ The transport is intentionally undecided until an EditorPlugin prototype is test
 4. `apply`: bounded mutations with read-back.
 5. `validate`: scene/resource/reference checks after mutation.
 
-The first vertical slice should be read-only: connect to a Godot project, discover capabilities, inspect a loaded scene tree, and inspect one Resource. Writes should follow only after identity, lifecycle, and error behavior are proven.
+The first vertical slice (read-only) is implemented: connect to a running Godot Editor, discover capabilities, inspect the edited scene tree, one node's property table, and Control layout. Writes must follow only after identity, lifecycle, and error behavior are proven; they are not implemented.
 
 ## Runtime boundary
 
@@ -70,7 +70,8 @@ Runtime launch, logs, screenshots, and process lifetime management are supportin
 
 ## Current truth
 
-- Scene/resource tools currently operate through TypeScript parsers and safe file writes.
+- Scene/resource **writes** currently operate through TypeScript parsers and safe file writes.
 - `scene_get_node_info` uses an engine-generated ClassDB dump, which is metadata only; it is not an object bridge.
-- No EditorPlugin or native object RPC endpoint is currently part of the repository.
+- A **read-only** EditorPlugin/RPC endpoint IS part of the repository (`godot_test/addons/vino-godot-mcp/`), exposed as `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` and `project_capabilities`. It never creates, modifies, saves, or undoes Godot objects.
+- The engine-native **write** channel (node creation, parenting, signal/group mutation, `ResourceSaver`, undo integration) is NOT implemented.
 - Windows process-tree management remains separate infrastructure and is intentionally not a prerequisite for this bridge.

@@ -13,7 +13,7 @@
 
 **AI-oriented semantic operation MCP for Godot 4.6.3+**
 The product goal is to let an agent understand, inspect, create, modify, organize, and validate Godot scenes, nodes, signals, groups, resources, and project settings.
-The current implementation provides a safe offline file channel; an authoritative Godot-native object bridge is the next architectural milestone.
+The current implementation provides a safe offline file channel plus a **read-only** Editor Bridge for live editor state; an authoritative Godot-native **write** channel is the next architectural milestone.
 Runtime Adapter only calls Godot CLI when engine-dependent capabilities are required.
 
 ---
@@ -40,6 +40,12 @@ Runtime Adapter only calls Godot CLI when engine-dependent capabilities are requ
 
 4. **Natural Language = Godot Development Control**
    After setup, simply chat with the AI (e.g. “Read the current project config and parse the main scene tree”). The AI will automatically operate the project through MCP tools.
+
+### Editor Bridge (read-only)
+
+`editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` and `project_capabilities` read the scene that is **currently open in a running Godot Editor** through an EditorPlugin + localhost TCP bridge. They need the addon in `godot_test/addons/vino-godot-mcp/` enabled in that project and a running Editor; otherwise they fail with `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`.
+
+What the bridge does **not** do: it does not create, modify, save, undo/redo, or otherwise write Godot objects. All scene/resource writes still go through the TypeScript parser + safe file write channel (`dryRun`, `expectedHash`, protected paths), and the engine-native write channel is **not implemented**. See [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md).
 
 ### Install from npm (recommended)
 
@@ -104,7 +110,7 @@ vino-godot-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
 ```
 
 to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `VINO_GODOT_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
@@ -215,6 +221,7 @@ The single source of truth is `allTools` in `src/tools/index.ts`; the startup lo
 | Utility | `utility_ping`, `utility_task_status` |
 | Runtime | `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot`, `runtime_inspect_ui`, `runtime_check_addon_status`, `runtime_visual_debug`, `runtime_start_session`, `runtime_get_session`, `runtime_read_session_logs`, `runtime_stop_session` |
 | Project | `project_capabilities`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_input_get`, `project_input_update` |
+| Editor (read-only) | `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` — require the Editor addon plus a running Godot Editor |
 | Scene | `scene_get_tree`, `scene_get_node_info`, `scene_find_nodes`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_get_connections`, `scene_analyze_connections`, `scene_update_signal_connection`, `scene_update_node_property`, `scene_remove_node`, `scene_add_node`, `scene_reparent_node`, `scene_add_to_group`, `scene_remove_from_group`, `scene_instantiate_scene`, `scene_connect_signal`, `scene_disconnect_signal` |
 | Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external` |
 | Shader | `shader_get_info`, `shader_update_uniform_default` |
@@ -222,7 +229,7 @@ The single source of truth is `allTools` in `src/tools/index.ts`; the startup lo
 | Class | `class_get_info`, `class_search`, `class_validate_member` |
 | Asset | `asset_list`, `asset_get_info` |
 
-> Tools that need authoritative class info (e.g. `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.vino-godot-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`.
+> Tools that need authoritative class info (`class_get_info`, `class_search`, `class_validate_member`, `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.vino-godot-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`. Because the first call starts `godot --headless --dump-extension-api` and writes that cache, these tools are advertised with `readOnlyHint: false` even though they never modify project content. The same applies to `project_validate` and `runtime_visual_debug`, which execute project code.
 
 ### Architecture & Documentation
 
@@ -261,6 +268,12 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 3. **自然语言对话即操作**  
    配置完成后，直接在 AI 客户端聊天框中使用自然语言下发指令（例如：“帮我读取当前项目的配置并解析主场景树”），AI 会自动通过 MCP 操控项目。
+
+### 编辑器桥（只读）
+
+`editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` 与 `project_capabilities` 通过 EditorPlugin + 本地 TCP 桥读取**正在运行的 Godot 编辑器中当前打开的场景**。使用前提是该工程启用了 `godot_test/addons/vino-godot-mcp/` 插件并开着编辑器，否则返回 `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`。
+
+这个桥**不做**什么：不创建、不修改、不保存、不进 Undo/Redo，也不写任何 Godot 对象。所有场景/资源写入仍然走 TypeScript 解析器 + 安全文件写入通道（`dryRun`、`expectedHash`、受保护路径），引擎原生写入通道**尚未实现**。详见 [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md)。
 
 ### 从 npm 安装（推荐）
 
@@ -325,7 +338,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 55 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
 ```
 
 然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`VINO_GODOT_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
@@ -436,6 +449,7 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 | Utility | `utility_ping`、`utility_task_status` |
 | Runtime | `runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot`、`runtime_inspect_ui`、`runtime_check_addon_status`、`runtime_visual_debug`、`runtime_start_session`、`runtime_get_session`、`runtime_read_session_logs`、`runtime_stop_session` |
 | Project | `project_capabilities`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_input_get`、`project_input_update` |
+| Editor（只读） | `editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` —— 需要启用编辑器插件并保持 Godot 编辑器运行 |
 | Scene | `scene_get_tree`、`scene_get_node_info`、`scene_find_nodes`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_get_connections`、`scene_analyze_connections`、`scene_update_signal_connection`、`scene_update_node_property`、`scene_remove_node`、`scene_add_node`、`scene_reparent_node`、`scene_add_to_group`、`scene_remove_from_group`、`scene_instantiate_scene`、`scene_connect_signal`、`scene_disconnect_signal` |
 | Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external` |
 | Shader | `shader_get_info`、`shader_update_uniform_default` |
@@ -443,7 +457,7 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 | Class | `class_get_info`、`class_search`、`class_validate_member` |
 | Asset | `asset_list`、`asset_get_info` |
 
-> 需要权威类信息的工具（如 `scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.vino-godot-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。
+> 需要权威类信息的工具（`class_get_info`、`class_search`、`class_validate_member`、`scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.vino-godot-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。由于首次调用会启动 `godot --headless --dump-extension-api` 并写入该缓存，这些工具的注解是 `readOnlyHint: false`，尽管它们不修改工程内容。`project_validate` 与 `runtime_visual_debug` 同理，因为它们会执行工程代码。
 
 ### 项目架构与文档
 
