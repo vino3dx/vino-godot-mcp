@@ -113,7 +113,7 @@ Without arguments the process starts a **stdio MCP server** and logs
 [vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
 ```
 
-to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The tool count is whatever the registry (`src/tools/index.ts`) actually registered, and it is smaller when `VINO_GODOT_MCP_GROUPS` filters domains. You normally never run it by hand — your AI client launches it after the configuration below.
+to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The count above is the `full` preset (everything in `src/tools/index.ts`); narrower presets and `VINO_GODOT_MCP_GROUPS` expose fewer tools. You normally never run it by hand — your AI client launches it after the configuration below.
 
 ### MCP Client Configuration (npm)
 
@@ -139,8 +139,59 @@ Add this to your AI client's MCP config (`.cursor/mcp.json`, CodeBuddy, Cline, �
 | Environment variable | Required | Meaning |
 |---|---|---|
 | `GODOT_PATH` | only for `runtime_*` tools | Absolute path to the Godot CLI. Tried first, `PATH` second (`src/godot/cli.ts`). A non-existent path fails loudly with `GODOT_NOT_FOUND` instead of silently falling back. |
-| `VINO_GODOT_MCP_GROUPS` | no | Comma-separated domain filter exposing fewer tools, e.g. `project,shader` (`src/mcp/registry/toolRegistry.ts`). |
+| `VINO_GODOT_MCP_PRESET` | no | Which dependency range to expose: `default` / `runtime` / `editor` / `full` (`src/mcp/registry/toolSelection.ts`). When unset it is `default`, unless `VINO_GODOT_MCP_GROUPS` is set — then no dependency filter is applied (pre-P1-C behaviour). Unknown values fail at startup with `INVALID_CONFIGURATION`. |
+| `VINO_GODOT_MCP_GROUPS` | no | Comma-separated domain filter exposing fewer tools, e.g. `project,shader`. Empty/unset means "no domain filter", unchanged from before (`src/mcp/registry/toolSelection.ts`). Unknown domains fail with `INVALID_CONFIGURATION`. |
 | `VINO_GODOT_MCP_LOG` | no | `debug` / `info` / `warn` / `error`; default `info` (`src/core/logger.ts`). |
+
+#### Tool presets and filtering
+
+Tools are filtered **before** they are registered, so an excluded tool is simply absent from `tools/list` (no dynamic `listChanged`). The exposed set is:
+
+```text
+exposed = preset (dependency range) ∩ groups (domain range)
+```
+
+| preset | dependencies | what it is for |
+|---|---|---|
+| `default` | `none` | Node + project files only: parse/patch `.tscn`/`.tres`/`.gd`, read project settings. Works with no Godot installed and no editor open. |
+| `runtime` | `none` + `godot` | adds everything that runs or probes the Godot engine (headless runs, ClassDB dump, project validation, runtime sessions). |
+| `editor` | `none` + `bridge` | adds the live Editor Bridge readers (`editor_*`, `project_capabilities`). |
+| `full` | `none` + `godot` + `bridge` | everything the build can do. |
+
+```json
+"env": {
+  "VINO_GODOT_MCP_PRESET": "editor",
+  "VINO_GODOT_MCP_GROUPS": "project,scene"
+}
+```
+
+- `preset` and `groups` are independent: a preset never adds a domain, a group never adds a dependency. Their intersection is what you get.
+- Both variable names and group names are trimmed and case-insensitive (`PRESET=RUNTIME`, `GROUPS=" Scene , Shader "` both work).
+- `runtimeRequired` is **not** used for filtering; it is only a legacy "starts a Runtime Adapter" hint.
+- The effective selection is logged at `INFO` on startup (stderr), e.g. `tool selection: preset=full source=legacy-groups dependencies=none+godot+bridge groups=project,shader tools=9/59`.
+
+**How the preset is chosen (backward compatible)**
+
+| `VINO_GODOT_MCP_PRESET` | `VINO_GODOT_MCP_GROUPS` | Effective preset | Effect |
+|---|---|---|---|
+| unset | unset/empty | `default` | 37 file-level tools |
+| unset | `project,shader` | `full` (source `legacy-groups`) | only groups are applied — **identical to pre-P1-C behaviour** |
+| `runtime` | unset/empty | `runtime` | 54 tools |
+| `editor` | `scene` | `editor` | strict intersection |
+
+Migration examples:
+
+```jsonc
+// Old config (still works, unchanged): only GROUPS
+{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 9 tools
+// Same intent, now explicit and future-proof
+{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 9 tools
+// Just the file-level subset (no Godot, no editor)
+{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 7 tools
+```
+
+- An unknown preset or group aborts startup with `INVALID_CONFIGURATION`; an intersection that exposes zero tools aborts with `TOOL_SELECTION_EMPTY` **plus the presets that would work**, e.g. `Fix: set VINO_GODOT_MCP_PRESET=runtime|full`. A groups-only config can never hit this, because it applies no dependency filter.
+- Note that an explicit `PRESET` is always strict: `PRESET=default` + `GROUPS=runtime` fails, while leaving `PRESET` unset keeps the old behaviour.
 
 > **Windows note**: if your client cannot find `npx`, use `"command": "npx.cmd"`, or `"command": "cmd"` with `"args": ["/c", "npx", "-y", "vino-godot-mcp"]`.
 
@@ -214,7 +265,7 @@ Local-build client config (instead of `npx`):
 
 **Tool Matrix**
 
-The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `vino-godot-mcp --help` report the live count, and `VINO_GODOT_MCP_GROUPS` can expose a subset (`project,shader`). No count is duplicated here.
+The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `vino-godot-mcp --help` report the live count, and `VINO_GODOT_MCP_PRESET` + `VINO_GODOT_MCP_GROUPS` can expose a subset. No count is duplicated here; the table lists every tool the build defines, regardless of the preset in use.
 
 | Domain | Tools |
 |--------|-------|
@@ -341,7 +392,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 [vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
 ```
 
-然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。工具数量取决于注册表（`src/tools/index.ts`）实际注册了多少，`VINO_GODOT_MCP_GROUPS` 过滤领域时会少于该数值。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
+然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。上面这个数量对应 `full` 预设（`src/tools/index.ts` 的全部工具）；更窄的预设与 `VINO_GODOT_MCP_GROUPS` 会暴露更少的工具。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
 
 ### 在 AI 客户端中配置（npm）
 
@@ -367,8 +418,59 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 | 环境变量 | 是否必需 | 说明 |
 |---|---|---|
 | `GODOT_PATH` | 仅 `runtime_*` 类工具需要 | Godot CLI 的绝对路径。优先读取它，其次在 `PATH` 中查找（`src/godot/cli.ts`）。路径不存在时会直接报 `GODOT_NOT_FOUND`，不会静默回退到 `PATH`。 |
-| `VINO_GODOT_MCP_GROUPS` | 否 | 逗号分隔的领域过滤，只向客户端暴露部分工具，例如 `project,shader`（`src/mcp/registry/toolRegistry.ts`）。 |
+| `VINO_GODOT_MCP_PRESET` | 否 | 按依赖范围暴露工具：`default` / `runtime` / `editor` / `full`（`src/mcp/registry/toolSelection.ts`）。未设置时取 `default`；但如果设置了 `VINO_GODOT_MCP_GROUPS`，则不按依赖过滤（保持 P1-C 之前的旧行为）。未知取值在启动时直接报 `INVALID_CONFIGURATION`。 |
+| `VINO_GODOT_MCP_GROUPS` | 否 | 逗号分隔的领域过滤，只向客户端暴露部分工具，例如 `project,shader`。空值/未设置表示不按领域过滤（与旧行为一致）（`src/mcp/registry/toolSelection.ts`）。未知领域会报 `INVALID_CONFIGURATION`。 |
 | `VINO_GODOT_MCP_LOG` | 否 | `debug` / `info` / `warn` / `error`，默认 `info`（`src/core/logger.ts`）。 |
+
+#### 工具预设与筛选
+
+筛选发生在工具注册**之前**：被排除的工具根本不会出现在 `tools/list` 里（没有动态 `listChanged`）。暴露集合为：
+
+```text
+暴露工具 = 预设（依赖范围） ∩ 分组（领域范围）
+```
+
+| preset | 依赖 | 适用场景 |
+|---|---|---|
+| `default` | `none` | 只用 Node 与工程文件：解析/改写 `.tscn`/`.tres`/`.gd`、读取项目设置。不需要安装 Godot，也不需要打开编辑器。 |
+| `runtime` | `none` + `godot` | 追加所有需要运行或探测 Godot 引擎的工具（headless 运行、ClassDB dump、工程校验、运行时会话）。 |
+| `editor` | `none` + `bridge` | 追加读取运行中编辑器的工具（`editor_*`、`project_capabilities`）。 |
+| `full` | `none` + `godot` + `bridge` | 本版本支持的全部工具。 |
+
+```json
+"env": {
+  "VINO_GODOT_MCP_PRESET": "editor",
+  "VINO_GODOT_MCP_GROUPS": "project,scene"
+}
+```
+
+- `preset` 与 `groups` 是两个正交维度：预设不会增加领域，分组也不会增加依赖，取交集。
+- 变量名与分组名都会 trim 且忽略大小写（`PRESET=RUNTIME`、`GROUPS=" Scene , Shader "` 都有效）。
+- `runtimeRequired` 不参与筛选，它只是"是否通过 Runtime Adapter 启动进程"的历史提示。
+- 生效结果会在启动时以 `INFO` 打到 stderr，例如 `tool selection: preset=full source=legacy-groups dependencies=none+godot+bridge groups=project,shader tools=9/59`。
+
+**预设的选择规则（向后兼容旧配置）**
+
+| `VINO_GODOT_MCP_PRESET` | `VINO_GODOT_MCP_GROUPS` | 生效预设 | 效果 |
+|---|---|---|---|
+| 未设置 | 未设置/空 | `default` | 37 个文件级工具 |
+| 未设置 | `project,shader` | `full`（source `legacy-groups`） | 只按分组过滤，**与 P1-C 之前完全一致** |
+| `runtime` | 未设置/空 | `runtime` | 54 个工具 |
+| `editor` | `scene` | `editor` | 严格取交集 |
+
+迁移示例：
+
+```jsonc
+// 旧配置（继续可用，行为不变）：只写 GROUPS
+{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 9 个工具
+// 同样效果，但改成显式写法，未来更可控
+{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 9 个工具
+// 只要文件级子集（不碰 Godot，也不碰编辑器）
+{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 7 个工具
+```
+
+- 未知预设/未知分组会在启动时报 `INVALID_CONFIGURATION`；交集为空报 `TOOL_SELECTION_EMPTY`，并直接给出**能用的预设**（例如 `Fix: set VINO_GODOT_MCP_PRESET=runtime|full`）。只写 `GROUPS` 的旧配置不会触发该错误，因为它不做依赖过滤。
+- 注意：显式写了 `PRESET` 就一定严格执行筛选，`PRESET=default` + `GROUPS=runtime` 会失败；不写 `PRESET` 才保持旧行为。
 
 > **Windows 提示**：如果客户端找不到 `npx`，可改为 `"command": "npx.cmd"`，或用 `"command": "cmd"` 搭配 `"args": ["/c", "npx", "-y", "vino-godot-mcp"]`。
 
@@ -442,7 +544,7 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 
 **当前工具矩阵**
 
-唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `vino-godot-mcp --help` 会报告实时数量，`VINO_GODOT_MCP_GROUPS` 可只暴露部分领域（如 `project,shader`）。此处不再重复硬编码数量。
+唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `vino-godot-mcp --help` 会报告实时数量，`VINO_GODOT_MCP_PRESET` 与 `VINO_GODOT_MCP_GROUPS` 可只暴露其中一部分。此处不再重复硬编码数量；下表列出的是本版本定义的全部工具，与实际启用哪个预设无关。
 
 | 领域 | 工具 |
 |------|------|
