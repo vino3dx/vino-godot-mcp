@@ -2,8 +2,10 @@
 // 组合根:唯一同时认识所有层的地方,同时也是 CLI 入口(--version / --help)。
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { GodotMcpError } from "./core/errors.js";
 import { createLogger } from "./core/logger.js";
-import { ToolRegistry, parseEnabledDomains } from "./mcp/registry/toolRegistry.js";
+import { ToolRegistry } from "./mcp/registry/toolRegistry.js";
+import { describeToolSelection, resolveToolSelection } from "./mcp/registry/toolSelection.js";
 import { ToolHost } from "./mcp/server/toolHost.js";
 import { startSdkServer } from "./mcp/server/sdkServer.js";
 import { createAppContext, type AppContext } from "./services/context.js";
@@ -28,9 +30,17 @@ function readPackageVersion(): string {
 export const VERSION = readPackageVersion();
 export const SERVER_INFO: { name: string; version: string } = { name: CLI_NAME, version: VERSION };
 
-export function buildHost(logger = createLogger()): ToolHost<AppContext> {
-  const registry = new ToolRegistry<AppContext>().registerAll(allTools);
-  return new ToolHost(registry, createAppContext(logger), logger, parseEnabledDomains(process.env["VINO_GODOT_MCP_GROUPS"]));
+/**
+ * 组合根:读取工具暴露策略(preset ∩ groups)后再注册。
+ * 筛选在注册之前完成,所以被排除的工具对 MCP 客户端完全不可见。
+ * env 可注入,便于测试;诊断信息只写 stderr(由 logger 保证)。
+ */
+export function buildHost(logger = createLogger(), env: Readonly<Record<string, string | undefined>> = process.env): ToolHost<AppContext> {
+  const selection = resolveToolSelection(allTools, env);
+  // info 级别:启动时就能看到生效的 preset / groups / 最终工具数(stderr,不影响协议)。
+  logger.info(describeToolSelection(selection, allTools.length));
+  const registry = new ToolRegistry<AppContext>().registerAll(selection.tools);
+  return new ToolHost(registry, createAppContext(logger), logger, selection.domains);
 }
 
 async function main(): Promise<void> {
@@ -95,7 +105,15 @@ export function runCli(argv: readonly string[]): void {
       process.exitCode = 2;
       return;
     case "serve":
-      main().catch((e) => { process.stderr.write(`[${CLI_NAME}] fatal: ${e instanceof Error ? e.stack : String(e)}\n`); process.exit(1); });
+      main().catch((e) => {
+        // 配置错误(未知 preset/group、空工具集)是可预期的:打印稳定错误码,不打整段 stack。
+        if (e instanceof GodotMcpError) {
+          process.stderr.write(`[${CLI_NAME}] fatal: ${e.code}: ${e.message}\n`);
+          process.exit(1);
+        }
+        process.stderr.write(`[${CLI_NAME}] fatal: ${e instanceof Error ? e.stack : String(e)}\n`);
+        process.exit(1);
+      });
       return;
   }
 }
