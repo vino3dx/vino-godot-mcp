@@ -13,6 +13,10 @@ config_version=5
 config/name="Vino Godot MCP Test Project"
 config/features=PackedStringArray("4.6")
 
+[dotnet]
+
+project/assembly_name="Vino Godot MCP Test Project"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/vino-godot-mcp/plugin.cfg")
@@ -21,3 +25,7 @@ enabled=PackedStringArray("res://addons/vino-godot-mcp/plugin.cfg")
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+
+[vino_godot_mcp]
+
+log_level="info"
