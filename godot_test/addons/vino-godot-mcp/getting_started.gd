@@ -31,7 +31,6 @@ const NODE_RECHECK_WINDOW_MS := 180000
 
 var _runner: Node
 var _theme: Theme
-var _last_width := -1.0
 
 # --- 第 2 节状态
 var _env_state := "unchecked"
@@ -83,7 +82,6 @@ var _agent_dir_select: OptionButton
 var _agent_dir_open_btn: Button
 var _agent_dir_path_label: Label
 var _clear_manual_btn: Button
-var _mascot: TextureRect
 var _ready_bar: PanelContainer
 var _ready_icon: TextureRect
 var _ready_label: Label
@@ -112,14 +110,6 @@ func _ready() -> void:
 	_update_mcp_ui()
 	_update_godot_ui()
 	_update_ready_bar()
-	_apply_compact_layout()
-
-
-## 窄面板下隐藏装饰插图，把宽度让给正文；宽面板再显示回来。
-## 阈值按"页面可用宽度"判断：Dock 320px 时页面实际约 296px，Dock 240px 时约 216px。
-func _apply_compact_layout() -> void:
-	if _mascot != null:
-		_mascot.visible = size.x >= 280
 
 
 ## 插件退出时调用：等待后台线程结束，避免线程对象被提前释放。
@@ -301,7 +291,7 @@ func _make_icon_button(text: String, icon_name: String, tooltip := "") -> Button
 
 
 func _build_repo_card(root: VBoxContainer) -> void:
-	var box := _make_card(root, 1, "项目介绍")
+	var box := _make_card(root, 0, "项目介绍")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
@@ -320,18 +310,11 @@ func _build_repo_card(root: VBoxContainer) -> void:
 	var repo_btn := _make_icon_button("查看仓库", "ExternalLink", "在浏览器中打开 %s" % GsConfig.REPO_URL)
 	repo_btn.pressed.connect(_on_repo_link_pressed)
 	actions.add_child(repo_btn)
-	_mascot = TextureRect.new()
-	_mascot.texture = _icon("Godot")
-	_mascot.custom_minimum_size = Vector2(54, 54)
-	_mascot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_mascot.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	_mascot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(_mascot)
 	_repo_status = _make_label(box, "", COLOR_ERROR, 12)
 
 
 func _build_node_card(root: VBoxContainer) -> void:
-	var box := _make_card(root, 2, "Node.js 环境检测")
+	var box := _make_card(root, 1, "Node.js 环境检测")
 	var status_row := _make_button_row(box)
 	_node_status_icon = _make_status_icon(COLOR_MUTED)
 	status_row.add_child(_node_status_icon)
@@ -355,7 +338,7 @@ func _build_node_card(root: VBoxContainer) -> void:
 
 
 func _build_mcp_card(root: VBoxContainer) -> void:
-	var box := _make_card(root, 3, "安装 MCP 工具")
+	var box := _make_card(root, 2, "安装 MCP 工具")
 	var status_row := _make_button_row(box)
 	_mcp_status_icon = _make_status_icon(COLOR_MUTED)
 	status_row.add_child(_mcp_status_icon)
@@ -397,7 +380,7 @@ func _build_mcp_card(root: VBoxContainer) -> void:
 
 
 func _build_agent_card(root: VBoxContainer) -> void:
-	var box := _make_card(root, 4, "配置你的 Agent")
+	var box := _make_card(root, 3, "配置你的 Agent")
 	_make_label(box, "以下配置已自动生成，你可以直接使用：", COLOR_MUTED, 13)
 
 	# 代码块：右上角"复制"，JSON 本体带独立横向滚动，不影响整体布局。
@@ -1004,11 +987,6 @@ func _on_job_finished(token: String, result: Dictionary) -> void:
 
 
 func _process(_delta: float) -> void:
-	# 宽度变化时才做一次紧凑布局判定（比依赖 resized 信号更可靠：
-	# 页面可能在信号连接前就被容器排版过）。
-	if size.x != _last_width:
-		_last_width = size.x
-		_apply_compact_layout()
 	if _runner == null:
 		return
 	if _runner.is_running(TOKEN_ENV):
