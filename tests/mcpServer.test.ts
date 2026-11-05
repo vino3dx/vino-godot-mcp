@@ -35,7 +35,8 @@ async function connectClient(mode: "legacy" | "auto"): Promise<{ client: Client;
     args: [SERVER_ENTRY],
     cwd: path.resolve(path.dirname(SERVER_ENTRY), "../.."),
     stderr: "pipe",
-    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "debug" },
+    // P1-C:这里验证协议表面本身,必须暴露全部工具;预设筛选行为在 toolSelection.test.ts 覆盖。
+    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "debug", VINO_GODOT_MCP_PRESET: "full" },
   });
 
   const stderr = transport.stderr;

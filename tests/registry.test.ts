@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ToolRegistry, parseEnabledDomains } from "../src/mcp/registry/toolRegistry.js";
-import type { ToolDefinition } from "../src/types/index.js";
+import { ToolRegistry } from "../src/mcp/registry/toolRegistry.js";
+import { parseToolGroups } from "../src/mcp/registry/toolSelection.js";
+import type { ToolDefinition, ToolDomain } from "../src/types/index.js";
 
 const mk = (name: string, domain: ToolDefinition["domain"] = "utility"): ToolDefinition => ({
   name, domain, description: "d", inputSchema: { type: "object" }, annotations: { readOnly: true }, dependency: "none", runtimeRequired: false,
@@ -17,8 +18,9 @@ test("register + duplicate + naming rules", () => {
   assert.equal(r.size, 1);
 });
 test("domain filtering (on-demand groups)", () => {
+  const known = new Set<ToolDomain>(["utility", "scene"]);
   const r = new ToolRegistry().registerAll([mk("utility_a"), mk("scene_create", "scene")]);
   assert.equal(r.list().length, 2);
-  assert.deepEqual(r.list(parseEnabledDomains("scene")).map((t) => t.name), ["scene_create"]);
-  assert.equal(parseEnabledDomains(undefined).size, 0);
+  assert.deepEqual(r.list(parseToolGroups("scene", known)).map((t) => t.name), ["scene_create"]);
+  assert.equal(parseToolGroups(undefined, known).size, 0);
 });

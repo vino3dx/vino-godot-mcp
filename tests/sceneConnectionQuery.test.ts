@@ -11,7 +11,8 @@ test("scene connection query tools are registered and static analysis distinguis
   fs.writeFileSync(path.join(root, "project.godot"), "[application]\nconfig/name=\"x\"\n");
   fs.writeFileSync(path.join(root, "main.tscn"), SCENE); fs.writeFileSync(path.join(root, "root.gd"), "extends Node\nfunc _on_pressed() -> void:\n pass\n");
   const { buildHost } = await import("../src/index.js");
-  const host = buildHost();
+  // 显式传 env:不依赖开发机上的 VINO_GODOT_MCP_PRESET/_GROUPS(否则本用例会随环境失败)。
+  const host = buildHost(undefined, { VINO_GODOT_MCP_PRESET: "full" });
   const q = await host.callTool("scene_get_connections", { projectPath: root, path: "res://main.tscn", sourcePath: "Button" });
   assert.equal(q.ok, true); assert.equal((q as { ok: true; data: { total: number } }).data.total, 1);
   const a = await host.callTool("scene_analyze_connections", { projectPath: root, path: "res://main.tscn" });

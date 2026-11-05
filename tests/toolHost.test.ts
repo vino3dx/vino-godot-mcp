@@ -73,7 +73,9 @@ test("image is emitted as a second MCP content block and kept out of the text JS
 });
 
 test("minimal real tools through the composition root", async () => {
-  const h = buildHost(quiet);
+  // P1-C:默认 preset 只暴露 dependency=none 的工具;这里要验证"全部工具都装配正确",
+  // 所以显式要求 full(预设本身的筛选行为见 toolSelection.test.ts)。
+  const h = buildHost(quiet, { VINO_GODOT_MCP_PRESET: "full" });
   assert.deepEqual(h.listTools().map((x) => x.name).sort(), [
     "asset_get_info", "asset_list", "class_get_info", "class_search", "class_validate_member", "editor_get_layout", "editor_get_node", "editor_get_scene", "editor_get_tree", "project_apply_changes", "project_capabilities", "project_get_config", "project_input_get", "project_input_update", "project_set_config", "project_validate",
     "resource_add_or_update_external", "resource_get_info", "resource_update_property",

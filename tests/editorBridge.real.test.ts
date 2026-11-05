@@ -49,7 +49,8 @@ async function connect(): Promise<{ client: Client; call: (name: string, args?: 
     args: [SERVER_ENTRY],
     cwd: path.resolve(SERVER_ENTRY, "../.."),
     stderr: "pipe",
-    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "warn" },
+    // P1-C:本用例需要 editor_* / project_capabilities(bridge)与磁盘 scene 工具,显式要求全部工具。
+    env: { ...getDefaultEnvironment(), VINO_GODOT_MCP_LOG: "warn", VINO_GODOT_MCP_PRESET: "full" },
   });
   const client = new Client({ name: "vino-godot-mcp-editor-e2e", version: "0.0.0" }, { versionNegotiation: { mode: "auto" } });
   await client.connect(transport);
