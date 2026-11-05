@@ -62,6 +62,19 @@ export type ToolResult =
 export interface ToolAnnotations { readOnly: boolean; destructive?: boolean; idempotent?: boolean }
 
 /**
+ * 工具的外部依赖:调用时真正需要存在的外部能力。与 ToolDomain 正交——
+ * domain 说的是"这个工具属于哪个功能领域",dependency 说的是"调用它需要什么环境"。
+ *
+ * - `none`:只需 Node 进程 + 本地文件系统(含 Godot 文本资源的静态解析/写入)。
+ * - `godot`:需要 Godot 可执行文件或引擎能力(CLI 探测、headless 运行、ClassDB dump、引擎校验),
+ *   包括依赖"由 Godot 创建的会话"的工具。
+ * - `bridge`:需要正在运行且可连接的 Godot Editor Bridge(EditorPlugin 的 TCP 通道)。
+ *
+ * 必须逐个工具显式声明,不得由 name 前缀、domain 或 runtimeRequired 推断。
+ */
+export type ToolDependency = "none" | "godot" | "bridge";
+
+/**
  * 工具定义。Ctx 由组合根(src/index.ts)决定,mcp 层不知道它的具体类型。
  * 命名规则:`<domain>_<action>`,name 必须以 domain 开头(注册时强制)。
  */
@@ -71,7 +84,16 @@ export interface ToolDefinition<Ctx = unknown> {
   description: string;
   inputSchema: JsonSchema & { type: "object" };
   annotations: ToolAnnotations;
-  /** 是否需要启动 Godot(Runtime Adapter)。普通文件级工具必须为 false。 */
+  /**
+   * 调用该工具所必需的外部能力(见 ToolDependency)。与 domain、runtimeRequired 都是独立维度。
+   */
+  dependency: ToolDependency;
+  /**
+   * 历史遗留的"运行状态提示":handler 是否会通过 Runtime Adapter 启动/停止一个 Godot 进程。
+   * 它**不是**"调用需要 Godot":一次性 CLI 探测(runtime_get_version)、引擎探针可降级为静态扫描
+   * (runtime_check_addon_status)、依赖已有 Godot 会话(runtime_get_session)都声明 false。
+   * 因此不能用它推断 dependency,也不能用 dependency 反推它;当前没有执行门槛,只用于展示。
+   */
   runtimeRequired: boolean;
   handler(args: Record<string, unknown>, ctx: Ctx): Promise<ToolOutput>;
 }
