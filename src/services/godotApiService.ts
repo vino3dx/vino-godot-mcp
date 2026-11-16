@@ -61,6 +61,36 @@ export interface ClassInfoProperty {
 
 export interface ClassInfoMethod extends ApiMethod { declaredBy?: string; inherited?: boolean }
 
+/** 字面量类别(只用于"明显不匹配"的粗判定,不做完整类型系统)。 */
+export type LiteralKind =
+  | "boolean" | "number" | "string" | "vector2" | "vector2i" | "vector3" | "vector3i"
+  | "color" | "rect2" | "nodepath" | "resource" | "array" | "dictionary" | "null" | "unknown";
+
+export interface NodePropertyCheck {
+  name: string;
+  status: "verified" | "unknown" | "type_mismatch" | "dynamic";
+  declaredBy?: string;
+  inherited?: boolean;
+  expectedType?: string;
+  literalKind?: LiteralKind;
+  reason?: string;
+}
+
+/** 写侧工具的 ClassDB 校验结果。`unavailable` 必须原样回报,不能假装通过。 */
+export interface NodePropertyValidation {
+  status: "verified" | "not_a_node" | "not_instantiable" | "class_missing" | "unavailable";
+  source: "classdb" | "none";
+  nodeType: string;
+  nodeTypeExists: boolean;
+  inheritsNode?: boolean;
+  isInstantiable?: boolean;
+  engineVersion?: string;
+  apiVersionFullName?: string;
+  properties: NodePropertyCheck[];
+  warnings: string[];
+  reason?: string;
+}
+
 export interface ClassInfo {
   nodeType: string;
   /** `core` | `editor`(dump 原文)。 */
@@ -168,6 +198,97 @@ export class GodotApiService {
     return { className, exists: Boolean(found), member, source: info.source };
   }
 
+  /**
+   * 校验节点类型与一组属性的 ClassDB 归属,用于写侧工具(P1-A)。
+   *
+   * 语义:
+   *   - 类不存在 / 非 Node 派生 / 不可实例化 → 由调用方决定是否拒绝(本方法如实回报)。
+   *   - 属性不在继承链 → 记 warning(不静默通过)。
+   *   - 字面量类型明显不符 → 记 warning。
+   *   - ClassDB 不可用 → status="unavailable",不抛错(调用方必须把这个状态回报给用户)。
+   *   - 无法可靠判断的属性(编辑器伪属性、theme_override、metadata 等)标为 "dynamic",不产生噪音 warning。
+   */
+  async validateNodeProperties(
+    projectPath: string | undefined,
+    nodeType: string,
+    properties: ReadonlyArray<{ name: string; value: string }>,
+  ): Promise<NodePropertyValidation> {
+    const base: NodePropertyValidation = {
+      status: "unavailable", source: "none", nodeType,
+      nodeTypeExists: false, properties: [], warnings: [],
+    };
+
+    let info: ClassInfo;
+    try {
+      info = await this.getClassInfo(projectPath, nodeType);
+    } catch (e) {
+      if (e instanceof GodotMcpError && e.code === "INVALID_ARGUMENT" && e.details?.["param"] === "nodeType") {
+        return {
+          ...base,
+          status: "class_missing",
+          reason: e.message,
+          warnings: [`Node type "${nodeType}" does not exist in ClassDB.`],
+        };
+      }
+      if (e instanceof GodotMcpError && (e.code === "GODOT_NOT_FOUND" || e.code === "GODOT_PROCESS_FAILED" || e.code === "PARSE_ERROR")) {
+        return { ...base, reason: `ClassDB validation is unavailable: ${e.message}` };
+      }
+      throw e;
+    }
+
+    const all = info.allProperties ?? info.properties;
+    const inheritance = [info.nodeType, ...info.inheritance];
+    const inheritsNode = inheritance.includes("Node");
+    const status: NodePropertyValidation["status"] = !inheritsNode
+      ? "not_a_node"
+      : info.isInstantiable ? "verified" : "not_instantiable";
+
+    const checked: NodePropertyCheck[] = [];
+    const warnings: string[] = [];
+    for (const property of properties) {
+      if (isUnverifiableSceneProperty(property.name)) {
+        checked.push({ name: property.name, status: "dynamic", reason: "editor/dynamic property, not a ClassDB member" });
+        continue;
+      }
+      const declared = all.find((p) => p.name === property.name);
+      if (!declared) {
+        checked.push({ name: property.name, status: "unknown" });
+        warnings.push(`Property "${property.name}" is not declared by "${info.nodeType}" or its ancestors.`);
+        continue;
+      }
+      const kind = inferLiteralKind(property.value);
+      const comparison = compareLiteralToType(declared, kind);
+      if (comparison === "mismatch") {
+        checked.push({
+          name: property.name, status: "type_mismatch", declaredBy: declared.declaredBy,
+          inherited: declared.inherited, expectedType: declared.type, literalKind: kind,
+        });
+        warnings.push(
+          `Property "${property.name}" on "${info.nodeType}" expects ${declared.type}, but the value looks like ${kind}.`,
+        );
+        continue;
+      }
+      checked.push({
+        name: property.name, status: "verified", declaredBy: declared.declaredBy,
+        inherited: declared.inherited, expectedType: declared.type,
+        ...(kind === "unknown" ? {} : { literalKind: kind }),
+      });
+    }
+
+    return {
+      status,
+      source: "classdb",
+      engineVersion: info.source.engineVersion,
+      apiVersionFullName: info.source.apiVersionFullName,
+      nodeType: info.nodeType,
+      nodeTypeExists: true,
+      inheritsNode,
+      isInstantiable: info.isInstantiable,
+      properties: checked,
+      warnings,
+    };
+  }
+
   /** `<项目根>/.vino-godot-mcp/extension-api/<版本>.json`(对外暴露给测试与文档)。 */
   cacheFileFor(projectRoot: string, version: string): string {
     return path.join(projectRoot, API_CACHE_DIR, API_CACHE_SUBDIR, `${cacheKeyOf(version)}.json`);
@@ -255,9 +376,14 @@ export class GodotApiService {
     try {
       return this.opts.godot.locate().path;
     } catch (e) {
-      if (e instanceof GodotMcpError && e.code === "GODOT_NOT_FOUND") throw engineUnavailable(e, this.opts.env ?? process.env);
+      if (e instanceof GodotMcpError && e.code === "GODOT_NOT_FOUND") throw engineUnavailable(e, this.env());
       throw e;
     }
+  }
+
+  /** 与注入的 GodotCliService 使用同一份 env,避免错误细节来自另一个环境。 */
+  private env(): NodeJS.ProcessEnv {
+    return this.opts.env ?? this.opts.godot.env;
   }
 
   /** `--version` 只跑一次(按 service 实例记忆)。 */
@@ -272,7 +398,7 @@ export class GodotApiService {
       const raw = info.raw.trim();
       return raw === "" ? info.version : raw;
     } catch (e) {
-      if (e instanceof GodotMcpError && e.code === "GODOT_NOT_FOUND") throw engineUnavailable(e, this.opts.env ?? process.env);
+      if (e instanceof GodotMcpError && e.code === "GODOT_NOT_FOUND") throw engineUnavailable(e, this.env());
       throw e;
     }
   }
@@ -283,6 +409,92 @@ export class GodotApiService {
     if (dot < 0) return api.globalEnums.get(ref);
     const owner = api.classes.get(ref.slice(0, dot));
     return owner?.enums.find((e) => e.name === ref.slice(dot + 1));
+  }
+}
+
+/** 编辑器/动态属性:不是 ClassDB 成员,但 .tscn 里合法出现。 */
+const SCENE_PSEUDO_PROPERTIES = new Set(["script", "layout_mode", "anchors_preset"]);
+
+/** 带 `/` 的名字(theme_override_*、metadata/* 等)由 _set/主题系统解析,ClassDB 不提供声明。 */
+function isUnverifiableSceneProperty(name: string): boolean {
+  return SCENE_PSEUDO_PROPERTIES.has(name) || name.includes("/");
+}
+
+/** 粗粒度字面量类别:只用于"明显不匹配"判定,不追求精确类型系统。 */
+function inferLiteralKind(raw: string): LiteralKind {
+  const s = raw.trim();
+  if (s === "true" || s === "false") return "boolean";
+  if (s === "null") return "null";
+  if (/^-?\d+$/.test(s) || /^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return "number";
+  if (/^"(?:[^"\\]|\\.)*"$/.test(s)) return "string";
+  if (s.startsWith("[")) return "array";
+  if (s.startsWith("{")) return "dictionary";
+  const ctor = /^([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*\(/.exec(s)?.[1];
+  switch (ctor) {
+    case "Vector2": return "vector2";
+    case "Vector2i": return "vector2i";
+    case "Vector3": return "vector3";
+    case "Vector3i": return "vector3i";
+    case "Color": return "color";
+    case "Rect2": return "rect2";
+    case "NodePath": return "nodepath";
+    case "ExtResource":
+    case "SubResource":
+    case "Resource": return "resource";
+    default: break;
+  }
+  if (ctor !== undefined && ctor.endsWith("Array")) return "array";
+  return "unknown";
+}
+
+const VECTOR_KINDS = new Set<LiteralKind>(["vector2", "vector2i", "vector3", "vector3i"]);
+const BUILTIN_TYPES = new Set([
+  "bool", "int", "float", "String", "StringName", "NodePath", "Vector2", "Vector2i", "Vector3", "Vector3i",
+  "Vector4", "Vector4i", "Rect2", "Rect2i", "Color", "Transform2D", "Transform3D", "Basis", "Quaternion",
+  "Plane", "AABB", "Projection", "Dictionary", "Array", "Variant", "Object", "void",
+]);
+
+/** 明显不匹配才返回 "mismatch";类型无法判定时返回 "unknown"(不制造噪音)。 */
+function compareLiteralToType(property: ClassInfoProperty, kind: LiteralKind): "match" | "mismatch" | "unknown" {
+  if (kind === "unknown") return "unknown";
+  if (property.enum !== undefined) return kind === "number" ? "match" : "mismatch";
+  const type = property.type.trim();
+  if (type === "bool") return kind === "boolean" ? "match" : "mismatch";
+  if (type === "int" || type === "float") return kind === "number" ? "match" : "mismatch";
+  if (type === "String" || type === "StringName") return kind === "string" ? "match" : "mismatch";
+  if (VECTOR_KINDS.has(type as LiteralKind)) return VECTOR_KINDS.has(kind) ? "match" : "mismatch";
+  if (type === "Color") return kind === "color" ? "match" : "mismatch";
+  if (type === "Rect2" || type === "Rect2i") return kind === "rect2" ? "match" : "mismatch";
+  if (type === "NodePath") return kind === "nodepath" || kind === "string" ? "match" : "mismatch";
+  if (type === "Dictionary") return kind === "dictionary" ? "match" : "mismatch";
+  if (type.startsWith("Array") || type.startsWith("Packed")) return kind === "array" ? "match" : "mismatch";
+  if (type === "Object") return kind === "resource" || kind === "null" ? "match" : "mismatch";
+  // 其余大写开头且非内建值的类型视为对象/资源(Texture2D、Material、Font …)。
+  if (!BUILTIN_TYPES.has(type) && /^[A-Z]/.test(type)) {
+    return kind === "resource" || kind === "null" ? "match" : "mismatch";
+  }
+  return "unknown";
+}
+
+/**
+ * 写侧工具用:类不存在/非 Node 派生/不可实例化时抛 INVALID_ARGUMENT。
+ * ClassDB 不可用(unavailable)不在这里拒绝 —— 调用方必须把它放进返回值。
+ */
+export function assertUsableNodeClass(validation: NodePropertyValidation): void {
+  if (validation.status === "class_missing") {
+    throw new GodotMcpError("INVALID_ARGUMENT", `ClassDB has no node class "${validation.nodeType}".`, {
+      param: "nodeType", nodeType: validation.nodeType, propertyValidation: validation,
+    });
+  }
+  if (validation.status === "not_a_node") {
+    throw new GodotMcpError("INVALID_ARGUMENT", `"${validation.nodeType}" is not a Node subclass and cannot be added to a scene.`, {
+      param: "nodeType", nodeType: validation.nodeType, propertyValidation: validation,
+    });
+  }
+  if (validation.status === "not_instantiable") {
+    throw new GodotMcpError("INVALID_ARGUMENT", `"${validation.nodeType}" is an abstract class and cannot be instantiated.`, {
+      param: "nodeType", nodeType: validation.nodeType, propertyValidation: validation,
+    });
   }
 }
 

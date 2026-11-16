@@ -15,7 +15,7 @@ export const editorGetLayout: ToolDefinition<AppContext> = {
     "Honesty about the numbers: they are computed inside the EDITOR viewport (viewportSize says which size produced them) and " +
     "include unsaved edits; when the parent is a Container the container assigns position/size so anchors/offsets on the child " +
     "are not authoritative; final runtime geometry can differ if the runtime viewport size differs. layout.notes states this per " +
-    "node. For post-layout runtime measurement use runtime_inspect_ui instead. Errors: BRIDGE_UNAVAILABLE / BRIDGE_DISCONNECTED / " +
+    "node. For post-layout runtime measurement use runtime_inspect_ui (runtime preset only) instead. Errors: BRIDGE_UNAVAILABLE / BRIDGE_DISCONNECTED / " +
     "BRIDGE_TIMEOUT / EDITOR_INSTANCE_MISMATCH / EDITOR_NO_SCENE_OPEN / EDITOR_SCENE_ROOT_MISSING / EDITOR_NODE_NOT_FOUND.",
   inputSchema: {
     type: "object",

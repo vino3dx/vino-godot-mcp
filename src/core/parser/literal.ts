@@ -3,7 +3,7 @@
 // 用途:写侧工具在改完文件后回报结构化的 before/after,agent 不必再自己 parse diff 文本。
 // 语义边界(重要):这里的值是**文件里写的静态值**,不是运行中的引擎值 ——
 //   - 不查 ClassDB、不做隐式类型转换、不套用引擎默认值;
-//   - Control 布局后的真实位置/尺寸由 runtime_inspect_ui 提供,与这里无关。
+//   - Control 布局后的真实位置/尺寸由 runtime_inspect_ui(runtime preset)提供,与这里无关。
 //
 // 无法识别的写法(Transform2D / ExtResource / SubResource / 数组 / Dictionary / StringName …)
 // 一律**只保留 raw**,不猜结构(见 parseGodotLiteral)。

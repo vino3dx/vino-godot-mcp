@@ -9,7 +9,7 @@ export const sceneRemoveNode: ToolDefinition<AppContext> = {
     "Rejects removing the scene root ('.' or '/root'). " +
     "Also returns removed:{nodePaths, count}: the paths of every [node] section deleted from the file text, " +
     "including the descendants of the removed node (file order, i.e. depth-first). " +
-    "These are static file values (this tool never runs Godot); a Control's true post-layout position/size comes from runtime_inspect_ui instead.",
+    "These are static file values (this tool never runs Godot); a Control's true post-layout position/size comes from runtime_inspect_ui (runtime preset only) instead.",
   inputSchema: {
     type: "object",
     required: ["path", "nodePath"],

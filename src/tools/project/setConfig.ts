@@ -9,7 +9,7 @@ export const projectSetConfig: ToolDefinition<AppContext> = {
     "Examples: section 'application' key 'config/name'; section 'display' key 'window/size/viewport_width'; section 'application' key 'run/main_scene'. " +
     "value is a raw Godot expression (quote strings, e.g. '\"res://main.tscn\"'). " +
     "Also returns change:{property, before, after, inFile}: the static literal values written in the file text, " +
-    "not the ProjectSettings values the engine reads (this tool never runs Godot; for real layout values use runtime_inspect_ui). " +
+    "not the ProjectSettings values the engine reads (this tool never runs Godot; for real layout values use runtime_inspect_ui — runtime preset only). " +
     "property is the key name only (the section is in the section argument); before is null and inFile false when the key was not in the file yet; " +
     "a literal that cannot be parsed as a Godot literal (e.g. PackedStringArray(...)) is reported as {raw} only.",
   inputSchema: {

@@ -44,6 +44,7 @@ function makeHost(t: { after: (fn: () => void) => void }): Host {
 
   writeFile(dir, "data/modules/player.gd", KEEP_GD);
   writeFile(dir, "data/modules/hero.txt", KEEP_TXT);
+  writeFile(dir, "data/modules/icon.png", PNG_BYTES);
   writeFile(dir, "assets/textures/hero.png", PNG_BYTES);
   writeFile(dir, "assets/config.json", '{"a": 1}\n');
   writeFile(dir, "icon.png", PNG_BYTES); // 项目根下的非文本文件(不受保护目录覆盖)
@@ -76,29 +77,43 @@ const overwrite = (host: ToolHost<AppContext>, scriptPath: string, content = "TO
 
 // ────────────────────── 受保护目录:覆盖既有文件 ──────────────────────
 
-test("overwriting an existing file under res://data/ is refused with PROTECTED_PATH", async (t) => {
+test("editable text under res://data/ may be overwritten; binary assets stay protected", async (t) => {
   const { dir, host } = makeHost(t);
 
-  const e = err(await overwrite(host, "res://data/modules/player.gd"));
-  assert.equal(e.code, "PROTECTED_PATH");
-  assert.match(e.message, /protected directory "res:\/\/data\/"/);
-  assert.equal(e.details?.["protectedDir"], "res://data/");
-  assert.equal(e.details?.["reason"], "protected-dir");
-  assert.equal(read(dir, "data/modules/player.gd"), KEEP_GD, "受保护文件必须逐字节不变");
+  // P0-C:源码/可编辑资源不再与导入缓存一视同仁。
+  const gd = ok(await overwrite(host, "res://data/modules/player.gd", "extends Node\n# edited\n"));
+  assert.equal(gd["changed"], true);
+  assert.equal(read(dir, "data/modules/player.gd"), "extends Node\n# edited\n");
+
+  writeFile(dir, "data/modules/icon.png", PNG_BYTES);
+  const png = err(await overwrite(host, "res://data/modules/icon.png"));
+  assert.equal(png.code, "PROTECTED_PATH");
+  assert.match(png.message, /protected directory "res:\/\/data\/"/);
+  assert.equal(png.details?.["protectedDir"], "res://data/");
+  assert.equal(png.details?.["reason"], "readonly-in-protected-dir");
+  assert.deepEqual(readBytes(dir, "data/modules/icon.png"), PNG_BYTES, "二进制素材必须逐字节不变");
 });
 
-test("overwriting an existing file in an res://assets/ subdirectory is refused (binary and text alike)", async (t) => {
+test("res://assets/ allows .gd/.tscn/.tres/.json but still refuses binary assets", async (t) => {
   const { dir, host } = makeHost(t);
+  writeFile(dir, "assets/ui/panel.tscn", '[gd_scene format=3]\n\n[node name="Root" type="Control"]\n');
+  writeFile(dir, "assets/config/hero.tres", '[gd_resource type="Resource" format=3]\n\n[resource]\n');
+
+  for (const [path, content] of [
+    ["res://assets/config.json", '{"b": 2}\n'],
+    ["res://assets/ui/panel.tscn", '[gd_scene format=3]\n\n[node name="Panel" type="Panel"]\n'],
+    ["res://assets/config/hero.tres", '[gd_resource type="Resource" format=3]\n\n[resource]\nvalue = 1\n'],
+  ] as const) {
+    const result = ok(await overwrite(host, path, content));
+    assert.equal(result["changed"], true, `${path} must be editable`);
+  }
+  assert.equal(read(dir, "assets/config.json"), '{"b": 2}\n');
+  assert.ok(read(dir, "assets/ui/panel.tscn").includes('type="Panel"'));
 
   const png = err(await overwrite(host, "res://assets/textures/hero.png"));
-  assert.equal(png.code, "PROTECTED_PATH", "受保护目录先于扩展名规则生效");
+  assert.equal(png.code, "PROTECTED_PATH", "受保护目录内的二进制仍然拒绝");
   assert.equal(png.details?.["protectedDir"], "res://assets/");
-
-  const json = err(await overwrite(host, "res://assets/config.json"));
-  assert.equal(json.code, "PROTECTED_PATH", "文本扩展名也不能覆盖受保护目录里的既有文件");
-
   assert.deepEqual(readBytes(dir, "assets/textures/hero.png"), PNG_BYTES);
-  assert.equal(read(dir, "assets/config.json"), '{"a": 1}\n');
 });
 
 test("creating a file inside a protected directory is still allowed", async (t) => {
@@ -131,12 +146,60 @@ test("environment variable adds extra protected directories; the two defaults st
   const extra = err(await overwrite(host, "res://vendor/keep.txt"));
   assert.equal(extra.code, "PROTECTED_PATH");
   assert.equal(extra.details?.["protectedDir"], "res://vendor/");
+  assert.equal(extra.details?.["protectionLevel"], "strict");
   assert.equal(read(dir, "vendor/keep.txt"), "vendor data\n");
+
+  // 环境变量追加的目录是 hard protection:文本也不放行(与 data/assets 的 editable 不同)。
+  writeFile(dir, "vendor/module.gd", "extends Node\n");
+  assert.equal(err(await overwrite(host, "res://vendor/module.gd")).details?.["protectionLevel"], "strict");
+  assert.equal(read(dir, "vendor/module.gd"), "extends Node\n");
 
   // 默认两项不可被环境变量移除,重复项与无法解释的条目(../evil)被忽略
   assert.deepEqual(protectedDirs(process.env), ["data", "assets", "vendor"]);
-  assert.equal(err(await overwrite(host, "res://data/modules/player.gd")).code, "PROTECTED_PATH");
-  assert.equal(read(dir, "data/modules/player.gd"), KEEP_GD);
+  assert.deepEqual(readBytes(dir, "assets/textures/hero.png"), PNG_BYTES);
+});
+
+test(".godot/ cache, .import and .uid are hard-protected for every write entry", async (t) => {
+  const { dir, host } = makeHost(t);
+  writeFile(dir, ".godot/imported/hero.png-abc.ctex", "ENGINE_CACHE");
+  writeFile(dir, "icon.png.import", '[remap]\n\nimporter="texture"\n');
+
+  const cache = err(await overwrite(host, "res://.godot/imported/hero.png-abc.ctex"));
+  assert.equal(cache.code, "PROTECTED_PATH");
+  assert.equal(cache.details?.["reason"], "engine-cache");
+  assert.equal(cache.details?.["protectionLevel"], "engine");
+
+  const importFile = err(await overwrite(host, "res://icon.png.import"));
+  assert.equal(importFile.code, "PROTECTED_PATH");
+  assert.equal(importFile.details?.["reason"], "engine-owned-extension");
+
+  const uidCreate = err(await host.callTool("script_create", { scriptPath: "res://player.gd.uid", content: "uid://new\n" }));
+  assert.equal(uidCreate.code, "PROTECTED_PATH");
+  assert.equal(fs.existsSync(path.join(dir, "player.gd.uid")), false);
+
+  const cacheCreate = err(await host.callTool("script_create", { scriptPath: "res://.godot/imported/new.ctex", content: "x" }));
+  assert.equal(cacheCreate.code, "PROTECTED_PATH");
+  assert.equal(fs.existsSync(path.join(dir, ".godot", "imported", "new.ctex")), false);
+
+  assert.equal(read(dir, ".godot/imported/hero.png-abc.ctex"), "ENGINE_CACHE");
+  assert.equal(read(dir, "icon.png.import"), '[remap]\n\nimporter="texture"\n');
+});
+
+test("point edits (editText) cannot write into .godot/ but work inside assets/", async (t) => {
+  const { dir, host } = makeHost(t);
+  writeFile(dir, ".godot/fake.tscn", '[gd_scene format=3]\n\n[node name="Root" type="Node"]\n');
+  const cacheEdit = err(await host.callTool("scene_update_node_property", {
+    path: "res://.godot/fake.tscn", nodePath: ".", key: "visible", value: "false",
+  }));
+  assert.equal(cacheEdit.code, "PROTECTED_PATH");
+  assert.equal(cacheEdit.details?.["reason"], "engine-cache");
+
+  writeFile(dir, "assets/ui/panel.tscn", '[gd_scene format=3]\n\n[node name="Root" type="Control"]\n');
+  const edited = ok(await host.callTool("scene_update_node_property", {
+    path: "res://assets/ui/panel.tscn", nodePath: ".", key: "mouse_filter", value: "2",
+  }));
+  assert.equal(edited["changed"], true);
+  assert.ok(read(dir, "assets/ui/panel.tscn").includes("mouse_filter = 2"));
 });
 
 // ────────────────────── 绕过尝试 ──────────────────────
@@ -165,11 +228,11 @@ test("case variants cannot bypass the lock on a case-insensitive filesystem", as
     t.diagnostic(`${process.platform}: filesystem is case-sensitive, "DATA" is a different directory — assertion not applicable`);
     return;
   }
-  const e = err(await overwrite(host, "res://DATA/modules/player.gd"));
+  // 大小写变体仍命中受保护目录:用不可编辑的二进制来证明分类没有因大小写失效。
+  const e = err(await overwrite(host, "res://DATA/modules/icon.png"));
   assert.equal(e.code, "PROTECTED_PATH");
   const assets = err(await overwrite(host, "res://Assets/textures/hero.png"));
   assert.equal(assets.code, "PROTECTED_PATH");
-  assert.equal(read(dir, "data/modules/player.gd"), KEEP_GD);
   assert.deepEqual(readBytes(dir, "assets/textures/hero.png"), PNG_BYTES);
 });
 
@@ -177,31 +240,31 @@ test("links pointing into a protected directory cannot bypass the lock", async (
   const { dir, host } = makeHost(t);
   const guard = new FileGuard(dir);
 
-  // 目录链接:res://link → res://data(名义路径不在受保护目录内)
+  // 目录链接:res://link → res://assets(名义路径不在受保护目录内);目标是不可编辑的 PNG。
   const dirLink = path.join(dir, "link");
   try {
-    fs.symlinkSync(path.join(dir, "data"), dirLink, process.platform === "win32" ? "junction" : "dir");
+    fs.symlinkSync(path.join(dir, "assets"), dirLink, process.platform === "win32" ? "junction" : "dir");
   } catch {
     t.skip("this environment cannot create directory links");
     return;
   }
-  assert.equal(guard.contains(path.join(dirLink, "modules", "player.gd")), true, "sanity: 链接仍在项目内");
+  assert.equal(guard.contains(path.join(dirLink, "textures", "hero.png")), true, "sanity: 链接仍在项目内");
 
-  const viaDirLink = err(await overwrite(host, "res://link/modules/player.gd"));
+  const viaDirLink = err(await overwrite(host, "res://link/textures/hero.png"));
   assert.equal(viaDirLink.code, "PROTECTED_PATH");
-  assert.equal(viaDirLink.details?.["protectedDir"], "res://data/");
+  assert.equal(viaDirLink.details?.["protectedDir"], "res://assets/");
 
-  // 文件链接:res://scripts/alias.txt → res://data/modules/hero.txt(扩展名本身合法)
-  const fileLink = path.join(dir, "scripts", "alias.txt");
+  // 文件链接:res://scripts/alias.png → res://assets/textures/hero.png
+  const fileLink = path.join(dir, "scripts", "alias.png");
   try {
-    fs.symlinkSync(path.join(dir, "data", "modules", "hero.txt"), fileLink, "file");
+    fs.symlinkSync(path.join(dir, "assets", "textures", "hero.png"), fileLink, "file");
   } catch {
     t.diagnostic("cannot create file links here; only the directory-link case was checked");
   }
   if (fs.existsSync(fileLink)) {
-    const viaFileLink = err(await overwrite(host, "res://scripts/alias.txt"));
+    const viaFileLink = err(await overwrite(host, "res://scripts/alias.png"));
     assert.equal(viaFileLink.code, "PROTECTED_PATH");
-    assert.equal(read(dir, "data/modules/hero.txt"), KEEP_TXT);
+    assert.deepEqual(readBytes(dir, "assets/textures/hero.png"), PNG_BYTES);
   }
 });
 
@@ -282,8 +345,13 @@ test("assertNotProtected is reusable for future delete/move tools", () => {
     assert.doesNotThrow(() => assertNotProtected(guard, path.join(dir, "data_extra", "x.txt"), "delete"), "同前缀的兄弟目录不受影响");
 
     if (process.platform === "win32") {
+      // 删除/移动在 editable 目录同样被拒;覆盖仅对可编辑文本放行。
       assert.throws(
-        () => assertNotProtected(guard, path.join(dir, "DATA", "Modules", "player.gd"), "overwrite"),
+        () => assertNotProtected(guard, path.join(dir, "DATA", "Modules", "player.gd"), "delete"),
+        (e: unknown) => (e as { code?: string }).code === "PROTECTED_PATH",
+      );
+      assert.throws(
+        () => assertNotProtected(guard, path.join(dir, "DATA", "Modules", "player.png"), "overwrite"),
         (e: unknown) => (e as { code?: string }).code === "PROTECTED_PATH",
       );
     }

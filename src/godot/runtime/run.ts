@@ -9,7 +9,7 @@
 //
 // CLI 选项拼写已对照 tests/fixtures/godot-help.txt(真实 Godot 4.6.3 `--help` 输出)复验:
 //   --path <directory> / --headless / --quit / --scene <path> / --export-release|--export-debug <preset> <path>。
-import type { Readable } from "node:stream";
+import { decodeProcessOutput, type DecodedText } from "../../core/outputEncoding.js";
 import { ProcessAdapter } from "./processAdapter.js";
 
 /** 单个流的捕获上限,防止失控输出导致无界内存增长。 */
@@ -37,6 +37,9 @@ export interface RunProcessResult {
   stderr: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  /** 实际解码采用的编码(真实 runner 填充;注入替身可省略)。 */
+  stdoutEncoding?: DecodedText["encoding"];
+  stderrEncoding?: DecodedText["encoding"];
   durationMs: number;
 }
 
@@ -129,10 +132,11 @@ export function defaultRunRunner(
       return;
     }
 
-    const stdout = { text: "", truncated: false };
-    const stderr = { text: "", truncated: false };
-    const unsubscribeStdout = child.onStdout((chunk) => collectChunk(chunk, stdout));
-    const unsubscribeStderr = child.onStderr((chunk) => collectChunk(chunk, stderr));
+    // 收集原始字节,退出后只解码一次:多字节字符不会被 chunk 边界拆坏。
+    const stdout = { chunks: [] as Buffer[], bytes: 0, truncated: false };
+    const stderr = { chunks: [] as Buffer[], bytes: 0, truncated: false };
+    const unsubscribeStdout = child.onStdout((chunk) => collectBytes(chunk, stdout));
+    const unsubscribeStderr = child.onStderr((chunk) => collectBytes(chunk, stderr));
 
     let settled = false;
     let timedOut = false;
@@ -162,14 +166,18 @@ export function defaultRunRunner(
       settled = true;
       clearTimeout(timer);
       if (opts.signal) opts.signal.removeEventListener("abort", kill);
+      const out = decodeProcessOutput(Buffer.concat(stdout.chunks), { truncated: stdout.truncated });
+      const err = decodeProcessOutput(Buffer.concat(stderr.chunks), { truncated: stderr.truncated });
       resolve({
         exitCode,
         signal,
         timedOut,
-        stdout: stdout.text,
-        stderr: stderr.text,
+        stdout: out.text,
+        stderr: err.text,
         stdoutTruncated: stdout.truncated,
         stderrTruncated: stderr.truncated,
+        stdoutEncoding: out.encoding,
+        stderrEncoding: err.encoding,
         durationMs: Date.now() - start,
       });
     });
@@ -177,25 +185,12 @@ export function defaultRunRunner(
 }
 
 /** 始终消费 data 事件以排空管道(防止子进程因 stdout 缓冲满而阻塞);超过上限后只排不存。 */
-function collect(stream: Readable | null, out: { text: string; truncated: boolean }): void {
-  if (!stream) return;
-  stream.setEncoding("utf8");
-  stream.on("data", (chunk: string) => {
-    if (out.truncated) return;
-    const next = out.text + chunk;
-    if (Buffer.byteLength(next, "utf8") > MAX_CAPTURE_BYTES) {
-      out.truncated = true;
-      return;
-    }
-    out.text = next;
-  });
-}
-
-function collectChunk(chunk: Buffer, out: { text: string; truncated: boolean }): void {
+function collectBytes(chunk: Buffer, out: { chunks: Buffer[]; bytes: number; truncated: boolean }): void {
   if (out.truncated) return;
-  const decoder = new TextDecoder("utf-8");
-  const text = decoder.decode(chunk);
-  const next = out.text + text;
-  if (Buffer.byteLength(next, "utf8") > MAX_CAPTURE_BYTES) { out.truncated = true; return; }
-  out.text = next;
+  const room = MAX_CAPTURE_BYTES - out.bytes;
+  if (room <= 0) { out.truncated = true; return; }
+  const slice = chunk.length <= room ? chunk : chunk.subarray(0, room);
+  out.chunks.push(slice);
+  out.bytes += slice.length;
+  if (slice.length < chunk.length) out.truncated = true;
 }

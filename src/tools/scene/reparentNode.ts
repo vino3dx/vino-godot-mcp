@@ -9,7 +9,7 @@ export const sceneReparentNode: ToolDefinition<AppContext> = {
     "Refuses to move a node into itself or one of its own descendants. " +
     "keepGlobalTransform=true is rejected: preserving the global transform needs the engine, which this file-level tool does not use. " +
     "Also returns moved:{from, to, count}: the original path, the new path and the number of [node] sections rewritten (subtree size; 0 when the node is already there). " +
-    "These are static file values (this tool never runs Godot — a Control's true post-layout position/size comes from runtime_inspect_ui).",
+    "These are static file values (this tool never runs Godot — a Control's true post-layout position/size comes from runtime_inspect_ui — runtime preset only).",
   inputSchema: {
     type: "object",
     required: ["path", "nodePath", "newParentPath"],

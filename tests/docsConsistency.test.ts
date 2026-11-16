@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { allTools } from "../src/tools/index.js";
+import { SCENE_FIRST_POLICY } from "../src/services/developmentGuidelines.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,4 +81,48 @@ test("bridge doc reflects the implemented read-only channel and the missing writ
   assert.match(bridgeDoc, /read-only/i);
   assert.match(bridgeDoc, /write channel uses the same framing but is not implemented/i);
   assert.match(bridgeDoc, /engine-native \*\*write\*\* channel .* is NOT implemented/is);
+});
+
+// P1-D: Scene-First 是共享策略,不是各写一份的文案。
+const SCENE_FIRST_TOOLS = [
+  "scene_add_node",
+  "scene_add_visual_node",
+  "scene_update_node_property",
+  "scene_set_ui_layout",
+  "scene_connect_signal",
+  "script_create",
+] as const;
+
+test("every scene-writing tool embeds the shared Scene-First policy text", () => {
+  for (const name of SCENE_FIRST_TOOLS) {
+    const tool = allTools.find((t) => t.name === name);
+    assert.ok(tool, `missing tool ${name}`);
+    assert.ok(
+      tool.description.includes(SCENE_FIRST_POLICY),
+      `${name} description must embed SCENE_FIRST_POLICY (single source: src/services/developmentGuidelines.ts)`,
+    );
+  }
+});
+
+test("runtime_inspect_ui is a real tool and every reference is preset-qualified", () => {
+  assert.ok(allTools.some((t) => t.name === "runtime_inspect_ui"), "runtime_inspect_ui must be registered");
+  for (const tool of allTools) {
+    if (tool.name === "runtime_inspect_ui" || !tool.description.includes("runtime_inspect_ui")) continue;
+    assert.match(
+      tool.description,
+      /runtime_inspect_ui[^.]*runtime preset/,
+      `${tool.name} must state that runtime_inspect_ui needs the runtime preset`,
+    );
+  }
+  assert.match(readme, /Runtime and editor tools are \*\*not exposed by the default preset\*\*/);
+  assert.match(readme, /Runtime 与 editor 工具\*\*不在默认预设中\*\*/);
+});
+
+test("README documents Scene-First Development in both languages", () => {
+  assert.match(readme, /### Scene-First Development/);
+  assert.match(readme, /### 场景优先开发（Scene-First Development）/);
+  assert.match(readme, /Create nodes at runtime only for content that is genuinely dynamic\./);
+  assert.match(readme, /只有内容确实需要动态生成时，才在运行时创建节点。/);
+  assert.match(readme, /`scene_create` is not part of this version/);
+  assert.match(readme, /`scene_create` 不属于本版本/);
 });

@@ -96,6 +96,24 @@ export interface SceneTree {
   connections: SceneConnection[];
 }
 
+/** 精简节点:只保留构建/定位需要的信息,不重复 path/parentPath/properties。 */
+export interface BriefSceneNode {
+  name: string;
+  type?: string;
+  script?: string;
+  isInstance?: boolean;
+  instanceScene?: string;
+  groups?: string[];
+  children?: BriefSceneNode[];
+}
+
+/** brief 模式的场景视图:一棵嵌套树 + 连接;不含与 root 重复的 nodes 扁平数组。 */
+export interface BriefSceneTree {
+  root?: BriefSceneNode;
+  connections: SceneConnection[];
+  nodeCount: number;
+}
+
 export interface SceneFindOptions {
   name?: string;
   type?: string;
@@ -353,6 +371,38 @@ export class SceneService {
   }
 
   /**
+   * 只读:取节点段头里的 `type=` 与实例标记,供写侧工具做 ClassDB 校验。
+   * 节点不存在返回 undefined(写侧会用原有错误路径报告)。
+   */
+  getNodeType(tscnText: string, nodePath: string): { nodePath: string; type?: string; isInstance: boolean } | undefined {
+    const ast = parseGodotResource(tscnText);
+    const target = normalizeNodePath(nodePath, "nodePath");
+    const section = findNodeSection(ast, target);
+    if (!section) return undefined;
+    const type = attrValue(section, "type");
+    return { nodePath: target, ...(type === undefined ? {} : { type }), isInstance: isInstanceSection(section) };
+  }
+
+  /** brief 模式:同一棵树只表达一次(嵌套 children),用于降低 token 消耗。 */
+  getSceneTreeBrief(tscnText: string): BriefSceneTree {
+    const tree = this.getSceneTree(tscnText);
+    const toBrief = (node: SceneNode): BriefSceneNode => ({
+      name: node.name,
+      ...(node.type === undefined ? {} : { type: node.type }),
+      ...(node.script === undefined ? {} : { script: node.script }),
+      ...(node.isInstance ? { isInstance: true } : {}),
+      ...(node.instanceScene === undefined ? {} : { instanceScene: node.instanceScene }),
+      ...(node.groups.length === 0 ? {} : { groups: [...node.groups] }),
+      ...(node.children.length === 0 ? {} : { children: node.children.map(toBrief) }),
+    });
+    return {
+      ...(tree.root === undefined ? {} : { root: toBrief(tree.root) }),
+      connections: tree.connections,
+      nodeCount: tree.nodes.length,
+    };
+  }
+
+  /**
    * 修改(属性已存在)或新增(不存在则在段体末尾、尾随空行之前插入)节点属性。
    * 返回无损序列化后的文本:除目标行/新增行外,其余字节不变。
    *
@@ -368,7 +418,7 @@ export class SceneService {
 
   /**
    * 与 updateNodeProperty 完全相同的写入,额外回报结构化前后值。
-   * before/after 都是**文件里的静态字面量**(不是引擎布局后的值;Control 的真实位置请用 runtime_inspect_ui);
+   * before/after 都是**文件里的静态字面量**(不是引擎布局后的值;Control 的真实位置请用 runtime_inspect_ui,仅 runtime preset 暴露);
    * 属性原本不在文件中时 before 为 null 且 inFile=false,不伪造引擎默认值。
    */
   updateNodePropertyResult(tscnText: string, nodePath: string, key: string, value: string): UpdateNodePropertyResult {

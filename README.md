@@ -41,6 +41,26 @@ Runtime Adapter only calls Godot CLI when engine-dependent capabilities are requ
 4. **Natural Language = Godot Development Control**
    After setup, simply chat with the AI (e.g. “Read the current project config and parse the main scene tree”). The AI will automatically operate the project through MCP tools.
 
+### Scene-First Development
+
+Vino Godot MCP follows a **Scene-First** policy: a Godot project keeps its structure in native scenes, not in code that rebuilds it at runtime.
+
+- `.tscn` — scene structure, node hierarchy, node properties, resource references and fixed signal connections.
+- `.gd` — business logic, state management, algorithms and dynamic behavior.
+- `.tres` — reusable resources, configuration and data.
+- Shaders — materials and rendering logic.
+
+Create nodes at runtime only for content that is genuinely dynamic.
+
+| Case | Preferred form |
+|---|---|
+| Main menu UI, HUD, fixed level layout | `.tscn` nodes |
+| Fixed signal wiring | `.tscn` `[connection]` (via `scene_connect_signal`) |
+| Player movement, combat, algorithms | `.gd` |
+| Spawned enemies, procedural maps, object pools, dynamic list UI | `.gd` at runtime |
+
+Tools follow the same split: `scene_add_node`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_update_node_property` and `scene_connect_signal` write the scene; `script_create` and `script_update_function` write logic. A new scene starts from a minimal `[gd_scene format=3]` bootstrap written with `script_create`, then its nodes are added with the scene tools — `scene_create` is not part of this version.
+
 ### Editor Bridge (read-only)
 
 `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` and `project_capabilities` read the scene that is **currently open in a running Godot Editor** through an EditorPlugin + localhost TCP bridge. They need the addon in `godot_test/addons/vino-godot-mcp/` enabled in that project and a running Editor; otherwise they fail with `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`.
@@ -99,7 +119,7 @@ npx -y vino-godot-mcp
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # registered globally?
 where.exe vino-godot-mcp               # launcher on PATH?
-vino-godot-mcp --version               # -> vino-godot-mcp 1.2.1
+vino-godot-mcp --version               # -> vino-godot-mcp 1.2.2
 vino-godot-mcp --help                  # usage, plus the stdio note below
 ```
 
@@ -110,7 +130,7 @@ vino-godot-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 61 tools exposed
 ```
 
 to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The count above is the `full` preset (everything in `src/tools/index.ts`); narrower presets and `VINO_GODOT_MCP_GROUPS` expose fewer tools. You normally never run it by hand — your AI client launches it after the configuration below.
@@ -183,11 +203,11 @@ Migration examples:
 
 ```jsonc
 // Old config (still works, unchanged): only GROUPS
-{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 9 tools
+{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 10 tools
 // Same intent, now explicit and future-proof
-{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 9 tools
+{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 10 tools
 // Just the file-level subset (no Godot, no editor)
-{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 7 tools
+{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 8 tools
 ```
 
 - An unknown preset or group aborts startup with `INVALID_CONFIGURATION`; an intersection that exposes zero tools aborts with `TOOL_SELECTION_EMPTY` **plus the presets that would work**, e.g. `Fix: set VINO_GODOT_MCP_PRESET=runtime|full`. A groups-only config can never hit this, because it applies no dependency filter.
@@ -267,14 +287,16 @@ Local-build client config (instead of `npx`):
 
 The single source of truth is `allTools` in `src/tools/index.ts`; the startup log and `vino-godot-mcp --help` report the live count, and `VINO_GODOT_MCP_PRESET` + `VINO_GODOT_MCP_GROUPS` can expose a subset. No count is duplicated here; the table lists every tool the build defines, regardless of the preset in use.
 
+Runtime and editor tools are **not exposed by the default preset**: they require `VINO_GODOT_MCP_PRESET=runtime` or `editor` (or `full`). The same applies to every other `dependency: "godot"` tool (`class_*`, `scene_get_node_info`, `project_validate`) and `dependency: "bridge"` tool (`editor_*`, `project_capabilities`). Tool descriptions that point at `runtime_inspect_ui` say so explicitly.
+
 | Domain | Tools |
 |--------|-------|
 | Utility | `utility_ping`, `utility_task_status` |
 | Runtime | `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot`, `runtime_inspect_ui`, `runtime_check_addon_status`, `runtime_visual_debug`, `runtime_start_session`, `runtime_get_session`, `runtime_read_session_logs`, `runtime_stop_session` |
-| Project | `project_capabilities`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_input_get`, `project_input_update` |
+| Project | `project_capabilities`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_check_changes`, `project_input_get`, `project_input_update` |
 | Editor (read-only) | `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` — require the Editor addon plus a running Godot Editor |
 | Scene | `scene_get_tree`, `scene_get_node_info`, `scene_find_nodes`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_get_connections`, `scene_analyze_connections`, `scene_update_signal_connection`, `scene_update_node_property`, `scene_remove_node`, `scene_add_node`, `scene_reparent_node`, `scene_add_to_group`, `scene_remove_from_group`, `scene_instantiate_scene`, `scene_connect_signal`, `scene_disconnect_signal` |
-| Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external` |
+| Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external`, `resource_check_uid` |
 | Shader | `shader_get_info`, `shader_update_uniform_default` |
 | Script | `script_get_info`, `script_update_export_default`, `script_create`, `script_analyze`, `script_find_references`, `script_update_function`, `script_project_graph` |
 | Class | `class_get_info`, `class_search`, `class_validate_member` |
@@ -319,6 +341,26 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 3. **自然语言对话即操作**  
    配置完成后，直接在 AI 客户端聊天框中使用自然语言下发指令（例如：“帮我读取当前项目的配置并解析主场景树”），AI 会自动通过 MCP 操控项目。
+
+### 场景优先开发（Scene-First Development）
+
+Vino Godot MCP 遵循 **Scene-First（场景优先）** 原则：Godot 工程的结构保存在原生场景中，而不是在运行时重建它的代码里。
+
+- `.tscn`：场景结构、节点层级、节点属性、资源引用与固定信号连接。
+- `.gd`：业务逻辑、状态管理、算法与动态行为。
+- `.tres`：可复用资源、配置与数据。
+- Shader：材质与渲染逻辑。
+
+只有内容确实需要动态生成时，才在运行时创建节点。
+
+| 场景 | 推荐形式 |
+|---|---|
+| 主菜单 UI、HUD、固定关卡结构 | `.tscn` 节点 |
+| 固定信号连接 | `.tscn` `[connection]`（通过 `scene_connect_signal`） |
+| 玩家移动、战斗、算法 | `.gd` |
+| 动态生成敌人、程序化地图、对象池、动态列表 UI | 运行时由 `.gd` 创建 |
+
+工具遵循同一分工：`scene_add_node`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_update_node_property`、`scene_connect_signal` 写场景；`script_create`、`script_update_function` 写逻辑。新场景先用 `script_create` 写最小 `[gd_scene format=3]` 引导骨架，再用场景工具添加节点；`scene_create` 不属于本版本。
 
 ### 编辑器桥（只读）
 
@@ -378,7 +420,7 @@ npx -y vino-godot-mcp
 ```powershell
 npm ls -g --depth=0 vino-godot-mcp   # 全局是否已登记？
 where.exe vino-godot-mcp               # 启动脚本是否在 PATH 上？
-vino-godot-mcp --version               # 输出：vino-godot-mcp 1.2.1
+vino-godot-mcp --version               # 输出：vino-godot-mcp 1.2.2
 vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 ```
 
@@ -389,7 +431,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.1" listening on stdio, 59 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 61 tools exposed
 ```
 
 然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。上面这个数量对应 `full` 预设（`src/tools/index.ts` 的全部工具）；更窄的预设与 `VINO_GODOT_MCP_GROUPS` 会暴露更少的工具。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
@@ -462,11 +504,11 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 
 ```jsonc
 // 旧配置（继续可用，行为不变）：只写 GROUPS
-{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 9 个工具
+{ "env": { "VINO_GODOT_MCP_GROUPS": "project,shader" } }        // 10 个工具
 // 同样效果，但改成显式写法，未来更可控
-{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 9 个工具
+{ "env": { "VINO_GODOT_MCP_PRESET": "full", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 10 个工具
 // 只要文件级子集（不碰 Godot，也不碰编辑器）
-{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 7 个工具
+{ "env": { "VINO_GODOT_MCP_PRESET": "default", "VINO_GODOT_MCP_GROUPS": "project,shader" } } // 8 个工具
 ```
 
 - 未知预设/未知分组会在启动时报 `INVALID_CONFIGURATION`；交集为空报 `TOOL_SELECTION_EMPTY`，并直接给出**能用的预设**（例如 `Fix: set VINO_GODOT_MCP_PRESET=runtime|full`）。只写 `GROUPS` 的旧配置不会触发该错误，因为它不做依赖过滤。
@@ -546,14 +588,16 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 
 唯一来源是 `src/tools/index.ts` 的 `allTools`；启动日志与 `vino-godot-mcp --help` 会报告实时数量，`VINO_GODOT_MCP_PRESET` 与 `VINO_GODOT_MCP_GROUPS` 可只暴露其中一部分。此处不再重复硬编码数量；下表列出的是本版本定义的全部工具，与实际启用哪个预设无关。
 
+Runtime 与 editor 工具**不在默认预设中**：需要设置 `VINO_GODOT_MCP_PRESET=runtime` 或 `editor`（或 `full`）。所有 `dependency: "godot"` 的工具（`class_*`、`scene_get_node_info`、`project_validate`）与 `dependency: "bridge"` 的工具（`editor_*`、`project_capabilities`）同理。指向 `runtime_inspect_ui` 的工具描述会明确标注这一点。
+
 | 领域 | 工具 |
 |------|------|
 | Utility | `utility_ping`、`utility_task_status` |
 | Runtime | `runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot`、`runtime_inspect_ui`、`runtime_check_addon_status`、`runtime_visual_debug`、`runtime_start_session`、`runtime_get_session`、`runtime_read_session_logs`、`runtime_stop_session` |
-| Project | `project_capabilities`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_input_get`、`project_input_update` |
+| Project | `project_capabilities`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_check_changes`、`project_input_get`、`project_input_update` |
 | Editor（只读） | `editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` —— 需要启用编辑器插件并保持 Godot 编辑器运行 |
 | Scene | `scene_get_tree`、`scene_get_node_info`、`scene_find_nodes`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_get_connections`、`scene_analyze_connections`、`scene_update_signal_connection`、`scene_update_node_property`、`scene_remove_node`、`scene_add_node`、`scene_reparent_node`、`scene_add_to_group`、`scene_remove_from_group`、`scene_instantiate_scene`、`scene_connect_signal`、`scene_disconnect_signal` |
-| Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external` |
+| Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external`、`resource_check_uid` |
 | Shader | `shader_get_info`、`shader_update_uniform_default` |
 | Script | `script_get_info`、`script_update_export_default`、`script_create`、`script_analyze`、`script_find_references`、`script_update_function`、`script_project_graph` |
 | Class | `class_get_info`、`class_search`、`class_validate_member` |

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GodotMcpError } from "../core/errors.js";
 import { FileGuard } from "../core/filesystem/fileGuard.js";
-import { assertNotProtected, assertOverwritableExtension } from "../core/filesystem/protectedPaths.js";
+import { assertCreatable, assertOverwritableExtension, assertWritable } from "../core/filesystem/protectedPaths.js";
 import { safeWriteFile, sha256Hex, type WriteOutcome } from "../core/filesystem/safeWrite.js";
 import { ProjectResolver } from "../core/project/projectResolver.js";
 
@@ -61,6 +61,15 @@ export class FileService {
     return { absPath, resPath: guard.toRes(absPath), text, hash: sha256Hex(text) };
   }
 
+  /**
+   * 只做保护规则检查,不读内容、不写盘 —— 供批量写入在预览/提交前复用同一套规则,
+   * 避免 project_apply_changes 绕过 createText/editText 的保护。
+   */
+  assertOverwriteTarget(projectPath: string | undefined, resPath: string): void {
+    const guard = this.guard(projectPath);
+    assertWritable(guard, guard.toAbsolute(resPath), "overwrite");
+  }
+
   listTextFiles(projectPath: string | undefined, extension = ".gd"): ReadResult[] {
     const guard = this.guard(projectPath);
     const root = guard.root;
@@ -78,7 +87,11 @@ export class FileService {
     return out.sort((a, b) => a.resPath.localeCompare(b.resPath));
   }
 
-  /** 读 → 就地变换 → 原子写回。edit 返回相同文本时自动跳过写盘(changed=false)。 */
+  /**
+   * 读 → 就地变换 → 原子写回。edit 返回相同文本时自动跳过写盘(changed=false)。
+   * 写入前应用统一保护策略:`.godot/`、`.import`、`.uid` 与 strict 目录一律拒绝;
+   * 默认保护目录内只允许可编辑文本(点编辑不套用扩展名白名单,因为 project.godot 等文件不在白名单里)。
+   */
   async editText(
     projectPath: string | undefined,
     resPath: string,
@@ -86,6 +99,7 @@ export class FileService {
     opts: EditOptions = {},
   ): Promise<EditResult> {
     const read = this.read(projectPath, resPath);
+    assertWritable(new FileGuard(this.resolver.resolve(projectPath)), read.absPath, "overwrite");
     const next = edit(read.text);
     const outcome = await safeWriteFile(read.absPath, next, {
       dryRun: opts.dryRun,
@@ -115,8 +129,10 @@ export class FileService {
       });
     }
     if (opts.overwrite === true && isExistingFile(absPath)) {
-      assertNotProtected(guard, absPath, "overwrite");
+      assertWritable(guard, absPath, "overwrite");
       assertOverwritableExtension(guard, absPath);
+    } else if (!fs.existsSync(absPath)) {
+      assertCreatable(guard, absPath);
     }
     const outcome = await safeWriteFile(absPath, content, {
       ...(opts.dryRun !== undefined ? { dryRun: opts.dryRun } : {}),

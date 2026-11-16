@@ -6,7 +6,7 @@
 //   3) 真实 MCP server 子进程:tools/list 与注册结果一致(证明筛选发生在注册之前)
 //
 // 断言不写死工具清单:期望值一律由 allTools + TOOL_PRESET_DEPENDENCIES 现算,
-// 只把"当前基线数量"(37/54/42/59)作为审计锚点。
+// 只把"当前基线数量"(38/55/43/60)作为审计锚点。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -49,8 +49,8 @@ function catchError(run: () => unknown): GodotMcpError {
 
 // ---------------------------------------------------------------- 预设本身
 
-test("four presets expose exactly their declared dependencies (baseline 37 / 54 / 42 / 59)", () => {
-  const baseline: Record<string, number> = { default: 37, runtime: 54, editor: 42, full: 59 };
+test("four presets expose exactly their declared dependencies (baseline 39 / 56 / 44 / 61)", () => {
+  const baseline: Record<string, number> = { default: 39, runtime: 56, editor: 44, full: 61 };
   for (const [preset, count] of Object.entries(baseline)) {
     const sel = selection({ [PRESET_ENV]: preset });
     assert.equal(sel.preset, preset);
@@ -70,10 +70,10 @@ test("no configuration falls back to preset=default with no group filtering", ()
   assert.equal(sel.preset, "default");
   assert.equal(sel.presetSource, "default");
   assert.equal(sel.domains.size, 0);
-  assert.equal(sel.tools.length, 37);
+  assert.equal(sel.tools.length, 39);
   // 空字符串与纯空白同样视为未配置
   assert.equal(parseToolPreset("   "), "default");
-  assert.equal(selection({ [PRESET_ENV]: "  ", [GROUPS_ENV]: " , " }).tools.length, 37);
+  assert.equal(selection({ [PRESET_ENV]: "  ", [GROUPS_ENV]: " , " }).tools.length, 39);
   assert.equal(selection({ [PRESET_ENV]: "  ", [GROUPS_ENV]: " , " }).presetSource, "default");
 });
 
@@ -101,18 +101,18 @@ test("compatibility matrix: unset / groups-only / preset-only / both", () => {
   const none = selection({});
   assert.equal(none.preset, "default");
   assert.equal(none.presetSource, "default");
-  assert.equal(none.tools.length, 37);
+  assert.equal(none.tools.length, 39);
 
   // 2) 只配置 GROUPS → 不做 dependency 过滤(旧行为)
   const legacy = selection({ [GROUPS_ENV]: "project,shader" });
   assert.equal(legacy.preset, "full");
   assert.equal(legacy.presetSource, "legacy-groups");
-  assert.equal(legacy.tools.length, 9, "7 project + 2 shader, exactly the pre-P1-C result");
+  assert.equal(legacy.tools.length, 10, "8 project + 2 shader, exactly the pre-P1-C result");
 
   // 3) 只配置 PRESET → 严格按预设
   const presetOnly = selection({ [PRESET_ENV]: "runtime" });
   assert.equal(presetOnly.presetSource, "env");
-  assert.equal(presetOnly.tools.length, 54);
+  assert.equal(presetOnly.tools.length, 56);
 
   // 4) 两者都配置 → 交集
   const both = selection({ [PRESET_ENV]: "runtime", [GROUPS_ENV]: "scene,script,utility" });
@@ -140,8 +140,8 @@ test("preset and group intersect: a group narrows the preset and never widens it
 test("legacy VINO_GODOT_MCP_GROUPS alone keeps the pre-P1-C tool set", () => {
   // 旧版本 = 只按领域过滤、不做 dependency 过滤。修复后必须逐领域完全一致。
   const legacyCounts: Array<[string, number]> = [
-    ["project,shader", 9], ["project", 7], ["scene", 17], ["runtime", 12], ["class", 3],
-    ["editor", 4], ["resource", 3], ["script", 7], ["shader", 2], ["asset", 2], ["utility", 2],
+    ["project,shader", 10], ["project", 8], ["scene", 17], ["runtime", 12], ["class", 3],
+    ["editor", 4], ["resource", 4], ["script", 7], ["shader", 2], ["asset", 2], ["utility", 2],
   ];
   for (const [raw, count] of legacyCounts) {
     const sel = selection({ [GROUPS_ENV]: raw });
@@ -152,12 +152,12 @@ test("legacy VINO_GODOT_MCP_GROUPS alone keeps the pre-P1-C tool set", () => {
   // 空值/空白仍表示"不过滤领域";此时等价于两个变量都没配置 → default
   for (const raw of [undefined, "", "  ", " , "]) {
     const sel = selection({ [GROUPS_ENV]: raw });
-    assert.equal(sel.tools.length, 37);
+    assert.equal(sel.tools.length, 39);
     assert.equal(sel.presetSource, "default");
   }
   // 显式 full + 空 groups 仍等于全部
   for (const raw of [undefined, "", "  ", " , "]) {
-    assert.equal(selection({ [PRESET_ENV]: "full", [GROUPS_ENV]: raw }).tools.length, 59);
+    assert.equal(selection({ [PRESET_ENV]: "full", [GROUPS_ENV]: raw }).tools.length, 61);
   }
 });
 
@@ -191,7 +191,7 @@ test("an empty intersection fails with TOOL_SELECTION_EMPTY plus an actionable f
 
 test("tools with a missing or illegal dependency are rejected before filtering", () => {
   // 正常输入不走异常路径
-  assert.equal(selection({ [PRESET_ENV]: "full" }).tools.length, 59);
+  assert.equal(selection({ [PRESET_ENV]: "full" }).tools.length, 61);
 
   const illegal = { ...allTools[0]!, name: "utility_broken", dependency: "network" as unknown as ToolDependency };
   const badError = catchError(() => resolveToolSelection([...allTools, illegal], { [PRESET_ENV]: "full" }));
@@ -225,7 +225,7 @@ test("filtering never rewrites name, handler or schema (same objects out)", () =
 
 test("composition root registers exactly the selected tools and hides the rest", async () => {
   const host = buildHost(quiet, { [PRESET_ENV]: "default" });
-  assert.equal(host.listTools().length, 37);
+  assert.equal(host.listTools().length, 39);
   assert.deepEqual(host.listTools().map((tool) => tool.name).sort(), expectedFor(["none"]));
 
   // 已注册的工具照常可用(handler/schema 未变)
@@ -286,14 +286,14 @@ test("real MCP server advertises only the selected tools (preset ∩ group)", as
   for (let waited = 0; waited < 2000 && !logs().includes("tool selection:"); waited += 25) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.match(logs(), /tool selection: preset=runtime source=env dependencies=none\+godot groups=scene,script,utility tools=26\/59/);
+  assert.match(logs(), /tool selection: preset=runtime source=env dependencies=none\+godot groups=scene,script,utility tools=26\/61/);
 });
 
 test("real MCP server without configuration exposes the default preset only", async (t) => {
   const { client } = await connectWith({});
   t.after(() => client.close());
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 37);
+  assert.equal(tools.length, 39);
   assert.deepEqual(tools.map((tool) => tool.name).sort(), expectedFor(["none"]));
 });
 
@@ -303,7 +303,7 @@ test("real MCP server with a legacy GROUPS-only config exposes the pre-P1-C set"
   t.after(() => client.close());
 
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 9, "7 project tools + 2 shader tools");
+  assert.equal(tools.length, 10, "8 project tools + 2 shader tools");
   assert.deepEqual(tools.map((tool) => tool.name).sort(), namesOf(allTools.filter((tool) => ["project", "shader"].includes(tool.domain))));
 
   // 引擎/桥工具在旧配置下必须依然可用(registry 里存在,只是能不能跑取决于环境)
@@ -315,5 +315,5 @@ test("real MCP server with a legacy GROUPS-only config exposes the pre-P1-C set"
   for (let waited = 0; waited < 2000 && !logs().includes("tool selection:"); waited += 25) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.match(logs(), /tool selection: preset=full source=legacy-groups dependencies=none\+godot\+bridge groups=project,shader tools=9\/59/);
+  assert.match(logs(), /tool selection: preset=full source=legacy-groups dependencies=none\+godot\+bridge groups=project,shader tools=10\/61/);
 });

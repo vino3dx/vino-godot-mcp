@@ -10,7 +10,7 @@ export const sceneInstantiateScene: ToolDefinition<AppContext> = {
     "The instanced scene's own nodes are NOT expanded (the file keeps a single instance reference). " +
     "Instantiating a scene into itself is rejected (no cyclic instantiation). A uid= is not written on the ext_resource (the 4.6.3 runtime saver does not write one either); Godot resolves it by path. " +
     "Also returns instantiated:{nodePath, scene}: where the instance node was written and which scene it points at (static file values; " +
-    "the instanced scene's own nodes are not part of this file — for real layout values use runtime_inspect_ui).",
+    "the instanced scene's own nodes are not part of this file — for real layout values use runtime_inspect_ui — runtime preset only).",
   inputSchema: {
     type: "object",
     required: ["path", "parentPath", "instanceScenePath"],

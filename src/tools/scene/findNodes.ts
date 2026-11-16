@@ -6,7 +6,7 @@ export const sceneFindNodes: ToolDefinition<AppContext> = {
   domain: "scene",
   description:
     "Find nodes in a .tscn scene by exact name/type, static type category, exact node path or subtree, group, script, or instance status. " +
-    "Returned properties are explicit values serialized in the scene file; runtime-computed layout requires runtime_inspect_ui.",
+    "Returned properties are explicit values serialized in the scene file; runtime-computed layout requires runtime_inspect_ui (runtime preset only).",
   inputSchema: {
     type: "object",
     required: ["path"],

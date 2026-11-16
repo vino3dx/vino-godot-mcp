@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "../../types/index.js";
 import type { AppContext } from "../../services/context.js";
+import { SCENE_FIRST_POLICY } from "../../services/developmentGuidelines.js";
 
 export const sceneConnectSignal: ToolDefinition<AppContext> = {
   name: "scene_connect_signal",
@@ -7,7 +8,8 @@ export const sceneConnectSignal: ToolDefinition<AppContext> = {
   description:
     "Connect a signal in a .tscn scene by writing a persisted [connection] section (lossless; the section is appended after the existing nodes/connections). " +
     "Both nodes must exist in the same scene. An identical signal/from/to/method connection is reported as a duplicate error. " +
-    "flags is a bit mask (CONNECT_DEFERRED=1, CONNECT_PERSIST=2, CONNECT_ONE_SHOT=4). CONNECT_PERSIST is implied for connections stored in a .tscn, so only the other bits (1|4|8|...) make a flags= field appear (verified against Godot 4.6.3).",
+    "flags is a bit mask (CONNECT_DEFERRED=1, CONNECT_PERSIST=2, CONNECT_ONE_SHOT=4). CONNECT_PERSIST is implied for connections stored in a .tscn, so only the other bits (1|4|8|...) make a flags= field appear (verified against Godot 4.6.3). " +
+    SCENE_FIRST_POLICY,
   inputSchema: {
     type: "object",
     required: ["path", "sourcePath", "signal", "targetPath", "method"],

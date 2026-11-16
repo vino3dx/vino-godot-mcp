@@ -1,5 +1,7 @@
 import type { ToolDefinition } from "../../types/index.js";
 import type { AppContext } from "../../services/context.js";
+import { SCENE_FIRST_POLICY } from "../../services/developmentGuidelines.js";
+import { assertUsableNodeClass } from "../../services/godotApiService.js";
 
 export const sceneAddNode: ToolDefinition<AppContext> = {
   name: "scene_add_node",
@@ -9,8 +11,9 @@ export const sceneAddNode: ToolDefinition<AppContext> = {
     "nodeType is only checked statically (must look like a class-name identifier) — ClassDB is NOT consulted, so a class that is not an instantiable Node subclass surfaces when Godot loads the scene. " +
     "A sibling with the same name is an error unless autoRename=true. " +
     "Also returns created:{nodePath, type, parent, properties}: the static values written into the file for the new node " +
-    "(this tool never runs Godot — a Control's true post-layout position/size comes from runtime_inspect_ui); " +
-    "properties maps each written property name to its literal ({raw} plus a parsed value when the literal is recognised).",
+    "(this tool never runs Godot — a Control's true post-layout position/size comes from runtime_inspect_ui — runtime preset only); " +
+    "properties maps each written property name to its literal ({raw} plus a parsed value when the literal is recognised). " +
+    SCENE_FIRST_POLICY,
   inputSchema: {
     type: "object",
     required: ["path", "parentPath", "nodeType", "nodeName"],
@@ -42,9 +45,13 @@ export const sceneAddNode: ToolDefinition<AppContext> = {
   dependency: "none",
   async handler(args, ctx) {
     const properties = (args["properties"] as Array<{ name: string; value: string }> | undefined) ?? [];
+    const projectPath = args["projectPath"] as string | undefined;
+    // P1-A:类是否存在、是否为可实例化 Node、属性是否属于继承链 —— 引擎可用时逐项校验。
+    const validation = await ctx.godotApi.validateNodeProperties(projectPath, args["nodeType"] as string, properties);
+    assertUsableNodeClass(validation);
     let summary: Record<string, unknown> = {};
     const data = await ctx.file.editText(
-      args["projectPath"] as string | undefined,
+      projectPath,
       args["path"] as string,
       (text) => {
         const r = ctx.scene.addNode(text, {
@@ -59,6 +66,9 @@ export const sceneAddNode: ToolDefinition<AppContext> = {
       },
       { dryRun: args["dryRun"] as boolean | undefined, expectedHash: args["expectedHash"] as string | undefined },
     );
-    return { data: { ...data, ...summary } };
+    return {
+      data: { ...data, ...summary, propertyValidation: validation, validationSource: validation.source },
+      ...(validation.warnings.length > 0 ? { warnings: validation.warnings } : {}),
+    };
   },
 };

@@ -9,6 +9,11 @@ export interface SafeWriteOptions {
   dryRun?: boolean;
   /** 写入前校验磁盘上现有内容的 sha256(hex);不匹配(含"文件不存在")抛 FILE_CHANGED。 */
   expectedHash?: string;
+  /**
+   * 保留原始行尾,不做 LF 归一化。
+   * 仅供回滚使用:把备份原文写回时必须逐字节恢复,包括 CRLF。
+   */
+  preserveLineEndings?: boolean;
 }
 
 export interface WriteOutcome {
@@ -35,7 +40,7 @@ export function normalizeEol(text: string): string {
  */
 export async function safeWriteFile(absPath: string, content: string, opts: SafeWriteOptions = {}): Promise<WriteOutcome> {
   const target = path.resolve(absPath);
-  const nextText = normalizeEol(content);
+  const nextText = opts.preserveLineEndings === true ? content : normalizeEol(content);
   const nextBuf = Buffer.from(nextText, "utf8");
   const newHash = sha256Hex(nextBuf);
 

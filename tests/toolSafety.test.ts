@@ -206,11 +206,11 @@ test("P1-B: dependency is only none / godot / bridge", () => {
   assert.deepEqual(illegalSource.map((b) => `${b.name} (${b.file})`), []);
 });
 
-test("P1-B: dependency classification matches the audited baseline (37 none / 17 godot / 5 bridge)", () => {
+test("P1-B: dependency classification matches the audited baseline (39 none / 17 godot / 5 bridge)", () => {
   const counts: Record<string, number> = {};
   for (const tool of allTools) counts[tool.dependency] = (counts[tool.dependency] ?? 0) + 1;
-  assert.deepEqual(counts, { none: 37, godot: 17, bridge: 5 }, `actual classification: ${JSON.stringify(counts)}`);
-  assert.equal(allTools.length, 59, "the audited baseline covers exactly 59 tools");
+  assert.deepEqual(counts, { none: 39, godot: 17, bridge: 5 }, `actual classification: ${JSON.stringify(counts)}`);
+  assert.equal(allTools.length, 61, "the audited baseline covers exactly 61 tools");
 });
 
 test("P1-B: every tool matches its domain default or an explicit exception", () => {

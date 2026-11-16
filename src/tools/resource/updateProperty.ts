@@ -8,7 +8,7 @@ export const resourceUpdateProperty: ToolDefinition<AppContext> = {
     "Set or add a property in a .tres section (lossless: only the target line changes). " +
     "sectionHeader: 'resource' for the main resource, or a sub_resource id (e.g. 'GDScript_1'). " +
     "Also returns change:{property, before, after, inFile}: the static literal values written in the file text, " +
-    "not engine-loaded resource values (this tool never runs Godot; for real layout values use runtime_inspect_ui). " +
+    "not engine-loaded resource values (this tool never runs Godot; for real layout values use runtime_inspect_ui — runtime preset only). " +
     "before is null and inFile false when the property was not in the section yet (engine defaults are not guessed); " +
     "a literal that cannot be parsed (e.g. Transform2D(...), ExtResource(...), arrays) is reported as {raw} only.",
   inputSchema: {

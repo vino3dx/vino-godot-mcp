@@ -18,6 +18,11 @@ export interface GodotCliServiceOptions {
 export class GodotCliService {
   constructor(private readonly opts: GodotCliServiceOptions = {}) {}
 
+  /** 本服务实际使用的环境变量(注入优先);错误细节必须与探测来源一致。 */
+  get env(): NodeJS.ProcessEnv {
+    return this.opts.env ?? process.env;
+  }
+
   /** 定位 Godot 并执行一次 `--version`。失败抛 GodotMcpError(GODOT_NOT_FOUND / GODOT_PROCESS_FAILED)。 */
   getVersion(): Promise<GodotVersionInfo> {
     return getGodotVersion({ env: this.opts.env, runner: this.opts.runner });

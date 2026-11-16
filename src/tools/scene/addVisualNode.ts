@@ -1,9 +1,10 @@
 import type { ToolDefinition } from "../../types/index.js";
 import type { AppContext } from "../../services/context.js";
+import { SCENE_FIRST_POLICY } from "../../services/developmentGuidelines.js";
 
 export const sceneAddVisualNode: ToolDefinition<AppContext> = {
   name: "scene_add_visual_node", domain: "scene",
-  description: "Create a TextureRect, Sprite2D or NinePatchRect and bind a project texture through ExtResource. Prefer this over writing a path or load() expression into a scene.",
+  description: "Create a TextureRect, Sprite2D or NinePatchRect and bind a project texture through ExtResource. Prefer this over writing a path or load() expression into a scene. " + SCENE_FIRST_POLICY,
   inputSchema: { type: "object", required: ["path", "parentPath", "nodeName", "texture"], properties: {
     path: { type: "string" }, projectPath: { type: "string" }, parentPath: { type: "string" }, nodeName: { type: "string" }, texture: { type: "string" },
     nodeType: { type: "string", enum: ["TextureRect", "Sprite2D", "NinePatchRect"], default: "TextureRect" },

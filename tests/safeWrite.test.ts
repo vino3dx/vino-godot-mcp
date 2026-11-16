@@ -23,6 +23,16 @@ test("writes atomically, normalizes to LF, reports changed/newHash", async () =>
   assert.deepEqual(fs.readdirSync(dir), ["a.txt"]);
 });
 
+test("preserveLineEndings keeps CRLF intact (rollback path)", async () => {
+  const dir = tmpdir();
+  const file = path.join(dir, "a.gd");
+  fs.writeFileSync(file, "extends Node\n");
+  const out = await safeWriteFile(file, "extends Node\r\n# keep\r\n", { preserveLineEndings: true });
+  assert.equal(out.changed, true);
+  assert.deepEqual(fs.readFileSync(file), Buffer.from("extends Node\r\n# keep\r\n", "utf8"));
+  assert.equal(sha256Hex(fs.readFileSync(file)), out.newHash);
+});
+
 test("creates missing parent directories and new files", async () => {
   const dir = tmpdir();
   const file = path.join(dir, "sub", "deep", "new.tscn");

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { GodotMcpError } from "../core/errors.js";
+import { decodeProcessOutput } from "../core/outputEncoding.js";
 
 const execFile = promisify(execFileCb);
 
@@ -89,8 +90,17 @@ export type GodotRunner = (
   opts: RunProbeOptions,
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const defaultRunner: GodotRunner = (file, args, opts) =>
-  execFile(file, args, { ...opts, windowsHide: true, killSignal: "SIGKILL", encoding: "utf8" });
+const defaultRunner: GodotRunner = async (file, args, opts) => {
+  // 不指定 encoding:拿原始字节,再由统一解码器判定 UTF-8 / UTF-16 BOM / Windows 回退。
+  const result = await execFile(file, args, { ...opts, windowsHide: true, killSignal: "SIGKILL", encoding: "buffer" }) as unknown as {
+    stdout?: Buffer;
+    stderr?: Buffer;
+  };
+  return {
+    stdout: decodeProcessOutput(result.stdout ?? Buffer.alloc(0)).text,
+    stderr: decodeProcessOutput(result.stderr ?? Buffer.alloc(0)).text,
+  };
+};
 
 export interface ParsedVersion {
   version: string;

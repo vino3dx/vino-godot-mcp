@@ -20,6 +20,8 @@ import { RuntimeSessionManager } from "./runtimeSessionManager.js";
 import { NativeBridgeService, defaultDescriptorPath } from "./nativeBridgeService.js";
 import { NativeBridgeClient } from "../godot/bridge/client.js";
 import { GdscriptProjectService } from "./gdscriptProjectService.js";
+import { UidCheckService } from "./uidService.js";
+import { ChangeCheckService } from "./changeCheckService.js";
 
 /** 应用上下文:传给每个 Tool handler。新增 Service 在这里挂载。 */
 export interface AppContext {
@@ -52,6 +54,10 @@ export interface AppContext {
   nativeBridge: NativeBridgeService;
   gdscriptProject: GdscriptProjectService;
   assets: AssetService;
+  /** UID 与 Path 一致性检查(只读)。 */
+  uids: UidCheckService;
+  /** 批量文件漂移检查(只读)。 */
+  changes: ChangeCheckService;
   validation: ProjectValidationService;
   batchFile: BatchFileService;
   inputMap: InputMapService;
@@ -83,6 +89,8 @@ export function createAppContext(logger: Logger, project: ProjectResolver = new 
     nativeBridge: new NativeBridgeService((root) => new NativeBridgeClient({ descriptorPath: defaultDescriptorPath(root) })),
     gdscriptProject: new GdscriptProjectService(file, script, scene),
     assets: new AssetService(project),
+    uids: new UidCheckService(project),
+    changes: new ChangeCheckService(project),
     validation: new ProjectValidationService({ godot, project, runQueue }),
     batchFile: new BatchFileService(new FileService(project), locks),
     inputMap: new InputMapService(new ProjectService()),

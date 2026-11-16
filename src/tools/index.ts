@@ -39,12 +39,14 @@ import { sceneDisconnectSignal } from "./scene/disconnectSignal.js";
 import { resourceGetInfo } from "./resource/getInfo.js";
 import { resourceUpdateProperty } from "./resource/updateProperty.js";
 import { resourceAddOrUpdateExternal } from "./resource/addOrUpdateExternal.js";
+import { resourceCheckUid } from "./resource/checkUid.js";
 import { projectGetConfig } from "./project/getConfig.js";
 import { projectSetConfig } from "./project/setConfig.js";
 import { projectValidate } from "./project/validate.js";
 import { projectApplyChanges } from "./project/applyChanges.js";
 import { projectInputGet } from "./project/inputGet.js";
 import { projectInputUpdate } from "./project/inputUpdate.js";
+import { projectCheckChanges } from "./project/checkChanges.js";
 import { shaderGetInfo } from "./shader/getInfo.js";
 import { shaderUpdateUniformDefault } from "./shader/updateUniformDefault.js";
 import { scriptGetInfo } from "./script/getInfo.js";
@@ -96,12 +98,14 @@ export const allTools: ToolDefinition<AppContext>[] = [
   resourceGetInfo,
   resourceUpdateProperty,
   resourceAddOrUpdateExternal,
+  resourceCheckUid,
   projectGetConfig,
   projectSetConfig,
   projectValidate,
   projectApplyChanges,
   projectInputGet,
   projectInputUpdate,
+  projectCheckChanges,
   shaderGetInfo,
   shaderUpdateUniformDefault,
   scriptGetInfo,

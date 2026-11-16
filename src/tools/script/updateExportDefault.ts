@@ -8,7 +8,7 @@ export const scriptUpdateExportDefault: ToolDefinition<AppContext> = {
     "Set or add the default value of an @export var in a .gd file (lossless: only the target line changes). " +
     "value is a raw GDScript expression (e.g. '300.0', '\"Hello\"', 'Vector2(1, 2)', '[1, 2]'). " +
     "Also returns change:{property, before, after, inFile}: the static literal values written in the file text, " +
-    "not runtime script values (this tool never runs Godot; for real layout values use runtime_inspect_ui). " +
+    "not runtime script values (this tool never runs Godot; for real layout values use runtime_inspect_ui — runtime preset only). " +
     "before is null and inFile false when the @export var had no default yet; " +
     "a literal that cannot be parsed as a Godot literal (e.g. '[1, 2]') is reported as {raw} only.",
   inputSchema: {
