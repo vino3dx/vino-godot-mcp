@@ -98,13 +98,24 @@ test("a directory entry is reported as unreadable instead of aborting", async (t
 
 test("duplicate paths and traversal are rejected as INVALID_ARGUMENT", async (t) => {
   const { host } = makeProject(t);
+  // 大小写变体只在大小写不敏感的文件系统上才是同一路径;跨平台用例用完全相同的路径。
   const duplicate = await host.callTool("project_check_changes", {
     files: [
       { path: "res://a.gd", expectedHash: "x" },
-      { path: "res://A.GD", expectedHash: "y" },
+      { path: "res://a.gd", expectedHash: "y" },
     ],
   });
   assert.equal(duplicate.ok, false);
+
+  if (process.platform === "win32") {
+    const caseVariant = await host.callTool("project_check_changes", {
+      files: [
+        { path: "res://a.gd", expectedHash: "x" },
+        { path: "res://A.GD", expectedHash: "y" },
+      ],
+    });
+    assert.equal(caseVariant.ok, false, "Windows 上大小写变体应视为重复路径");
+  }
 
   const traversal = await host.callTool("project_check_changes", {
     files: [{ path: "../outside.gd", expectedHash: "x" }],
