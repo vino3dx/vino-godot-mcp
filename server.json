@@ -7,12 +7,12 @@
     "url": "https://github.com/vino3dx/vino-godot-mcp",
     "source": "github"
   },
-  "version": "1.2.2",
+  "version": "1.2.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "vino-godot-mcp",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "transport": {
         "type": "stdio"
       }
