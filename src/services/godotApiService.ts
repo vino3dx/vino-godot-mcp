@@ -76,6 +76,30 @@ export interface NodePropertyCheck {
   reason?: string;
 }
 
+/**
+ * `scene_connect_signal` 的信号存在性校验结果。
+ * `unavailable` 必须原样回报,不能假装通过(也不能因此拦截写入 —— 引擎不可用时降级为警告)。
+ */
+export interface NodeSignalValidation {
+  status: "verified" | "class_missing" | "not_a_node" | "unavailable";
+  source: "classdb" | "none";
+  nodeType: string;
+  nodeTypeExists: boolean;
+  /** 被校验的信号名。 */
+  signal: string;
+  /** 该类型(含继承链)是否声明了这个信号;status 非 verified 时为 false(不代表"不存在")。 */
+  hasSignal: boolean;
+  /** 声明该信号的类;hasSignal 为 true 时才出现。 */
+  declaredBy?: string;
+  /** 信号来自祖先类(而非 nodeType 自身)。 */
+  inherited?: boolean;
+  /** 名字相近的信号(拼写错误的提示),最多 5 个。 */
+  suggestions?: string[];
+  engineVersion?: string;
+  apiVersionFullName?: string;
+  reason?: string;
+}
+
 /** 写侧工具的 ClassDB 校验结果。`unavailable` 必须原样回报,不能假装通过。 */
 export interface NodePropertyValidation {
   status: "verified" | "not_a_node" | "not_instantiable" | "class_missing" | "unavailable";
@@ -289,6 +313,68 @@ export class GodotApiService {
     };
   }
 
+  /**
+   * 校验某个类(含继承链)是否声明了一个信号 —— `scene_connect_signal` 的 D3 校验。
+   *
+   * 语义(与 validateNodeProperties 一致,不猜):
+   *   - 类不存在 → class_missing(调用方**不得**据此拦截:类型来自场景文件,可能是 GDExtension/插件类);
+   *   - 类型不是 Node 派生 → not_a_node;
+   *   - ClassDB 不可用 → unavailable(调用方降级为警告);
+   *   - 其余为 verified:hasSignal 才是权威结论,可据此硬拦截拼错的信号名。
+   */
+  async validateNodeSignal(
+    projectPath: string | undefined,
+    nodeType: string,
+    signalName: string,
+  ): Promise<NodeSignalValidation> {
+    const base: NodeSignalValidation = {
+      status: "unavailable", source: "none", nodeType, nodeTypeExists: false, signal: signalName, hasSignal: false,
+    };
+
+    let info: ClassInfo;
+    try {
+      info = await this.getClassInfo(projectPath, nodeType);
+    } catch (e) {
+      if (e instanceof GodotMcpError && e.code === "INVALID_ARGUMENT" && e.details?.["param"] === "nodeType") {
+        return { ...base, status: "class_missing", reason: e.message };
+      }
+      if (e instanceof GodotMcpError && (e.code === "GODOT_NOT_FOUND" || e.code === "GODOT_PROCESS_FAILED" || e.code === "PARSE_ERROR")) {
+        return { ...base, reason: `ClassDB validation is unavailable: ${e.message}` };
+      }
+      throw e;
+    }
+
+    if (![info.nodeType, ...info.inheritance].includes("Node")) {
+      return {
+        ...base,
+        status: "not_a_node",
+        nodeTypeExists: true,
+        reason: `"${info.nodeType}" is not a Node subclass, so it cannot be a scene signal source.`,
+      };
+    }
+
+    const signals: Array<ApiSignal & { declaredBy?: string; inherited?: boolean }> = info.allSignals ?? info.signals;
+    const declared = signals.find((s) => s.name === signalName);
+    const result: NodeSignalValidation = {
+      status: "verified",
+      source: "classdb",
+      nodeType: info.nodeType,
+      nodeTypeExists: true,
+      signal: signalName,
+      hasSignal: declared !== undefined,
+      engineVersion: info.source.engineVersion,
+      ...(info.source.apiVersionFullName === undefined ? {} : { apiVersionFullName: info.source.apiVersionFullName }),
+    };
+    if (declared === undefined) {
+      const suggestions = closestSignalNames(signals.map((s) => s.name), signalName);
+      if (suggestions.length > 0) result.suggestions = suggestions;
+      return result;
+    }
+    if (declared.declaredBy !== undefined) result.declaredBy = declared.declaredBy;
+    result.inherited = declared.inherited === true;
+    return result;
+  }
+
   /** `<项目根>/.vino-godot-mcp/extension-api/<版本>.json`(对外暴露给测试与文档)。 */
   cacheFileFor(projectRoot: string, version: string): string {
     return path.join(projectRoot, API_CACHE_DIR, API_CACHE_SUBDIR, `${cacheKeyOf(version)}.json`);
@@ -418,6 +504,48 @@ const SCENE_PSEUDO_PROPERTIES = new Set(["script", "layout_mode", "anchors_prese
 /** 带 `/` 的名字(theme_override_*、metadata/* 等)由 _set/主题系统解析,ClassDB 不提供声明。 */
 function isUnverifiableSceneProperty(name: string): boolean {
   return SCENE_PSEUDO_PROPERTIES.has(name) || name.includes("/");
+}
+
+/**
+ * 与请求名相近的信号名(拼写错误的提示):编辑距离 ≤ 2、或互为前缀的排在前面,最多 5 个。
+ * 只是为了给出"你是否想写 pressed"这类提示,不做权威判断。
+ */
+function closestSignalNames(candidates: readonly string[], wanted: string): string[] {
+  const needle = wanted.toLowerCase();
+  const scored = candidates
+    .map((name) => {
+      const lower = name.toLowerCase();
+      const distance = editDistance(lower, needle);
+      const prefix = lower.startsWith(needle) || needle.startsWith(lower);
+      return { name, distance, prefix };
+    })
+    .filter((x) => x.distance <= 2 || x.prefix)
+    .sort((a, b) => (a.prefix === b.prefix ? a.distance - b.distance : a.prefix ? -1 : 1));
+  const out: string[] = [];
+  for (const x of scored) {
+    if (out.length >= 5) break;
+    if (!out.includes(x.name)) out.push(x.name);
+  }
+  return out;
+}
+
+/** Levenshtein 距离(信号名很短,直接两行动态规划即可)。 */
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0]!;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = prev[j]!;
+      prev[j] = Math.min(
+        prev[j]! + 1,
+        prev[j - 1]! + 1,
+        diagonal + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
+      );
+      diagonal = above;
+    }
+  }
+  return prev[b.length]!;
 }
 
 /** 粗粒度字面量类别:只用于"明显不匹配"判定,不追求精确类型系统。 */

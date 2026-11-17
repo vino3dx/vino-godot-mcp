@@ -136,6 +136,33 @@ test("scene_reparent_node: 正常路径 — 整棵子树搬到新父节点下,pa
   const again = ok(await host.callTool("scene_reparent_node", { path: "res://scenes/main.tscn", nodePath: "Player/Holder", newParentPath: "Player" }));
   assert.equal(again["changed"], false);
   assert.equal(again["movedNodes"], 0);
+  assert.equal(again["connections"], 0);
+});
+
+test("scene_reparent_node: D2 — 引用被移动子树的 [connection] 的 from/to 路径同步改写", async (t) => {
+  const { dir, host } = makeHost(t);
+  const p = "res://scenes/main.tscn";
+  ok(await host.callTool("scene_add_node", { path: p, parentPath: ".", nodeType: "Node2D", nodeName: "Holder" }));
+  ok(await host.callTool("scene_add_node", { path: p, parentPath: "Holder", nodeType: "Marker2D", nodeName: "Leaf" }));
+  // 两条连接都落在被移动的子树里(命中子孙路径 + 命中根路径),另有一条指向子树之外(必须保持原样)
+  ok(await host.callTool("scene_connect_signal", { path: p, sourcePath: "Holder/Leaf", signal: "ready", targetPath: "Holder", method: "_on_leaf_ready" }));
+  ok(await host.callTool("scene_connect_signal", { path: p, sourcePath: "Holder", signal: "tree_exited", targetPath: ".", method: "_on_holder_exited" }));
+
+  const r = ok(await host.callTool("scene_reparent_node", { path: p, nodePath: "Holder", newParentPath: "Player" }));
+  assert.equal(r["connections"], 2, "两条引用被移动路径的连接都要回报为已改写");
+
+  const text = read(dir, "scenes/main.tscn");
+  assertLossless(text);
+  assert.ok(text.includes('[connection signal="ready" from="Player/Holder/Leaf" to="Player/Holder" method="_on_leaf_ready"]'));
+  assert.ok(text.includes('[connection signal="tree_exited" from="Player/Holder" to="." method="_on_holder_exited"]'));
+  assert.ok(!text.includes('from="Holder'), "旧路径前缀必须全部消失,否则引擎会静默丢弃连接");
+  assert.ok(text.includes('[connection signal="ready" from="Player" to="." method="_on_ready"]'), "子树外的连接不得被改写");
+
+  // 读回:连接仍能按新节点路径解析
+  const conns = ok(await host.callTool("scene_get_connections", { path: p }));
+  const seen = (conns["connections"] as Array<{ source: string; target: string; signal: string }>).map((c) => `${c.source}|${c.signal}|${c.target}`);
+  assert.ok(seen.includes("Player/Holder/Leaf|ready|Player/Holder"));
+  assert.ok(seen.includes("Player/Holder|tree_exited|."));
 });
 
 test("scene_reparent_node: 错误路径 — 移入自身子孙 / 节点不存在 / 移动根节点 / keepGlobalTransform", async (t) => {
@@ -279,13 +306,14 @@ test("scene_connect_signal: 正常路径 — 写入 [connection] 段(文本验�
   assert.ok(!text.includes("flags="));
   assert.ok(text.includes('[connection signal="ready" from="Player" to="." method="_on_ready"]')); // 既有连接保留
 
+  // D3 之后信号名会被 ClassDB 校验,所以这里用一个真实存在的信号(Sprite2D 继承自 Node 的 tree_exited)
   const flagged = ok(await host.callTool("scene_connect_signal", {
-    path: p, sourcePath: "Player/Sprite", signal: "pressed", targetPath: ".", method: "_on_pressed", flags: 3,
+    path: p, sourcePath: "Player/Sprite", signal: "tree_exited", targetPath: ".", method: "_on_sprite_exited", flags: 3,
   }));
   assert.equal(flagged["flags"], 3);
   text = read(dir, "scenes/main.tscn");
   assertLossless(text);
-  assert.ok(text.includes('[connection signal="pressed" from="Player/Sprite" to="." method="_on_pressed" flags=3]'));
+  assert.ok(text.includes('[connection signal="tree_exited" from="Player/Sprite" to="." method="_on_sprite_exited" flags=3]'));
   // connection 段在 node 段之后
   assert.ok(text.lastIndexOf("[connection") > text.lastIndexOf("[node"));
 });
@@ -300,6 +328,24 @@ test("scene_connect_signal: 错误路径 — 重复连接 / 节点不存在 / �
   assert.equal(err(await host.callTool("scene_connect_signal", { path: p, sourcePath: "Ghost", signal: "ready", targetPath: ".", method: "_x" })).code, "INVALID_ARGUMENT");
   assert.equal(err(await host.callTool("scene_connect_signal", { path: p, sourcePath: "Player", signal: "my signal", targetPath: ".", method: "_x" })).code, "INVALID_ARGUMENT");
   assert.equal(err(await host.callTool("scene_connect_signal", { path: p, sourcePath: "Player", signal: "ready2", targetPath: ".", method: "_x", flags: -1 })).code, "INVALID_ARGUMENT");
+});
+
+test("scene_connect_signal: D3 — 不存在的信号名要么被拦截,要么被明确标注为未验证(绝不报 verified)", async (t) => {
+  const { host } = makeHost(t);
+  const p = "res://scenes/main.tscn";
+  // 引擎可用 → 硬拦截;引擎不可用 → 降级为警告并回报 status=unverified。两种情况都不得报 verified。
+  const r = await host.callTool("scene_connect_signal", {
+    path: p, sourcePath: "Player", signal: "no_such_signal_xyz", targetPath: ".", method: "_x",
+  });
+  if (r.ok) {
+    const validation = (r.data as Record<string, unknown>)["signalValidation"] as { status: string; signal: string };
+    assert.equal(validation.status, "unverified", "ClassDB 不可用时必须如实标注未验证,不能假装通过");
+    assert.equal(validation.signal, "no_such_signal_xyz");
+    assert.ok((r.warnings ?? []).length > 0, "未验证的信号必须带 warning");
+  } else {
+    assert.equal(r.error.code, "INVALID_ARGUMENT");
+    assert.match(r.error.message, /has no signal 'no_such_signal_xyz'/);
+  }
 });
 
 test("scene_disconnect_signal: 正常路径删除连接;不存在时明确提示且不报错", async (t) => {

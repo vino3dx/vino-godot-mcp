@@ -208,6 +208,12 @@ export interface ReparentNodeResult {
   movedNodes: number;
   /** 本次位移的 from/to/count 摘要(与 nodePath/movedNodes 同源)。 */
   moved: MovedNode;
+  /**
+   * 同步改写了 `from`/`to` 的 `[connection]` 段数量。
+   * 引擎加载 .tscn 时按路径解析连接两端,路径失效会被**静默丢弃**(不报错),
+   * 所以重挂父节点必须与节点树在同一次落盘里改写连接路径。
+   */
+  connections: number;
 }
 
 /** 分组写操作的入参(scene_add_to_group / scene_remove_from_group 共用)。 */
@@ -371,16 +377,28 @@ export class SceneService {
   }
 
   /**
-   * 只读:取节点段头里的 `type=` 与实例标记,供写侧工具做 ClassDB 校验。
+   * 只读:取节点段头里的 `type=`、挂载脚本与实例标记,供写侧工具做 ClassDB / 脚本声明校验。
    * 节点不存在返回 undefined(写侧会用原有错误路径报告)。
    */
-  getNodeType(tscnText: string, nodePath: string): { nodePath: string; type?: string; isInstance: boolean } | undefined {
+  getNodeType(
+    tscnText: string,
+    nodePath: string,
+  ): { nodePath: string; type?: string; script?: string; isInstance: boolean } | undefined {
     const ast = parseGodotResource(tscnText);
     const target = normalizeNodePath(nodePath, "nodePath");
     const section = findNodeSection(ast, target);
     if (!section) return undefined;
     const type = attrValue(section, "type");
-    return { nodePath: target, ...(type === undefined ? {} : { type }), isInstance: isInstanceSection(section) };
+    const scriptEntry = section.body.find((e): e is GodotResourceProperty => e.kind === "property" && e.name === "script");
+    const scriptRaw = scriptEntry === undefined ? undefined : bodyValue(scriptEntry);
+    // 能解析成 res:// 就回报路径,解析不到时保留段体原文(与 getSceneTree 的 script 字段同规则)
+    const script = scriptRaw === undefined ? undefined : resolveExtRef(scriptRaw, extResourcePaths(ast)) ?? scriptRaw;
+    return {
+      nodePath: target,
+      ...(type === undefined ? {} : { type }),
+      ...(script === undefined ? {} : { script }),
+      isInstance: isInstanceSection(section),
+    };
   }
 
   /** brief 模式:同一棵树只表达一次(嵌套 children),用于降低 token 消耗。 */
@@ -520,6 +538,8 @@ export class SceneService {
   /**
    * 移动节点:目标及其全部子孙的 `parent` 路径前缀一并改写,整棵子树段搬到新父节点的子树之后
    * (保持深度优先顺序);段头里已有的 `owner` 若落在被移动的子树内也同步改写。
+   * 同时把引用了被移动路径的 `[connection]` 的 `from`/`to` 前缀一并改写 ——
+   * 引擎加载 .tscn 时找不到旧路径会**静默丢弃**该连接(表现为按钮/触发器点了没反应且无报错)。
    */
   reparentNode(tscnText: string, o: ReparentNodeOptions): ReparentNodeResult {
     if (o.keepGlobalTransform === true) {
@@ -549,7 +569,13 @@ export class SceneService {
     const destPath = joinNodePath(newParent, name);
     if (immediateParentOf(targetSection) === newParent) {
       // 已在新父节点下:不改动(否则会把该子树重排到兄弟末尾,产生无意义的 diff)
-      return { text: tscnText, nodePath: destPath, movedNodes: 0, moved: { from: target, to: destPath, count: 0 } };
+      return {
+        text: tscnText,
+        nodePath: destPath,
+        movedNodes: 0,
+        moved: { from: target, to: destPath, count: 0 },
+        connections: 0,
+      };
     }
 
     const subtree = ast.sections.filter((s) => isInNodeSubtree(s, target));
@@ -565,6 +591,9 @@ export class SceneService {
         if (next !== ownerRaw) section.headerRaw = setHeaderAttr(section.headerRaw, "owner", quote(next));
       }
     }
+
+    // 连接的两端也是路径:必须与节点树在同一次序列化里改写,否则引擎加载时静默丢连接
+    const connections = rewriteConnectionPaths(ast, target, destPath);
 
     const moved = new Set(subtree);
     const rest = ast.sections.filter((s) => !moved.has(s));
@@ -582,6 +611,7 @@ export class SceneService {
       nodePath: destPath,
       movedNodes: subtree.length,
       moved: { from: target, to: destPath, count: subtree.length },
+      connections,
     };
   }
 
@@ -866,6 +896,35 @@ function uniqueSiblingName(base: string, taken: readonly string[]): string {
 function mapPathPrefix(path: string, from: string, to: string): string {
   if (path === from) return to;
   return path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
+}
+
+/**
+ * 重挂父节点时同步改写所有 `[connection]` 的 `from`/`to` 路径前缀(含被移动节点的子孙路径,
+ * 以及实例节点子树内部的路径 —— 它们跟着实例节点一起搬)。
+ *
+ * 为什么必须做:引擎加载 .tscn 时按路径解析连接两端,解析失败会**静默丢弃**该连接而不报错,
+ * 用户看到的现象是"按钮/触发器点了没反应",排查成本极高。连接路径因此与节点树一起原子落盘。
+ *
+ * 返回被改写的 `[connection]` 段数量(未命中的段保持逐字节不变)。
+ */
+function rewriteConnectionPaths(ast: GodotResourceAST, from: string, to: string): number {
+  let rewritten = 0;
+  for (const section of findGodotResourceSections(ast, "connection")) {
+    let touched = false;
+    for (const name of ["from", "to"] as const) {
+      const current = attrValue(section, name);
+      if (current === undefined) continue;
+      const next = mapPathPrefix(current, from, to);
+      if (next === current) continue;
+      // 段头是序列化的唯一真实来源;attributes 同步更新,便于后续在同一 AST 上读回
+      section.headerRaw = setHeaderAttr(section.headerRaw, name, quote(next));
+      const attribute = section.attributes.find((a) => a.name === name);
+      if (attribute) attribute.value = quote(next);
+      touched = true;
+    }
+    if (touched) rewritten++;
+  }
+  return rewritten;
 }
 
 function newlineOf(ast: GodotResourceAST): GodotLineEnding {
