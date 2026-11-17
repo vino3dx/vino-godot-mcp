@@ -70,13 +70,15 @@ function scanToolBlocks(): ToolBlock[] {
   return blocks;
 }
 
-/** 需要引擎进程 / 会写文件系统 / 会控制常驻进程的调用。 */
+/** 需要引擎进程 / 会写文件系统 / 会控制常驻进程 / 会改编辑器内场景的调用。 */
 const SIDE_EFFECTS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
   { label: "engine process (ctx.runtime.*)", pattern: /ctx\.runtime\./ },
   { label: "engine API dump (ctx.godotApi.*)", pattern: /ctx\.godotApi\./ },
   { label: "engine validation (ctx.validation.*)", pattern: /ctx\.validation\./ },
   { label: "project file write (ctx.file.editText/createText, ctx.batchFile)", pattern: /ctx\.file\.(?:editText|createText)|ctx\.batchFile\./ },
   { label: "runtime session lifecycle (ctx.runtimeSessions.start/stop)", pattern: /ctx\.runtimeSessions\.(?:start|stop)/ },
+  // 编辑器桥的写入/选择/历史操作会真实改动编辑器内的场景（即使不落地到 .tscn）。
+  { label: "editor bridge write (ctx.nativeBridge.set/add/remove/select/undo/redo)", pattern: /ctx\.nativeBridge\.(?:setEditorNodeProperty|addEditorNode|removeEditorNode|selectEditorNode|undoEditor|redoEditor)/ },
 ];
 
 function byName(name: string) {
@@ -115,6 +117,9 @@ test("engine-executing and file-writing tools are advertised as not read-only", 
     "resource_update_property", "resource_add_or_update_external",
     "project_set_config", "project_input_update", "project_apply_changes", "project_init",
     "script_create", "script_update_function", "script_update_export_default",
+    // 改运行中编辑器内的场景（UndoRedo 写入 / 选择 / 历史）
+    "editor_set_property", "editor_add_node", "editor_remove_node", "editor_select_node",
+    "editor_undo", "editor_redo",
   ] as const;
   for (const name of mustBeWritable) assert.equal(byName(name).annotations.readOnly, false, `${name} must not claim readOnly`);
 });
@@ -129,7 +134,7 @@ test("runtime_visual_debug declares its real side effects", () => {
 });
 
 test("destructive tools are marked and never read-only", () => {
-  for (const name of ["project_apply_changes", "scene_remove_node", "scene_disconnect_signal", "runtime_stop_session"] as const) {
+  for (const name of ["project_apply_changes", "scene_remove_node", "scene_disconnect_signal", "runtime_stop_session", "editor_remove_node"] as const) {
     const tool = byName(name);
     assert.equal(tool.annotations.destructive, true, `${name} must be destructive`);
     assert.equal(tool.annotations.readOnly, false, `${name} must not be readOnly`);
@@ -138,10 +143,14 @@ test("destructive tools are marked and never read-only", () => {
   assert.deepEqual(conflicting, []);
 });
 
-test("editor bridge tools stay read-only until a write channel exists", () => {
-  // 依据 docs/GODOT_NATIVE_BRIDGE.md:编辑器桥当前只有只读能力。若将来加了写侧工具,这条断言会提醒同步文档。
-  for (const name of ["editor_get_scene", "editor_get_tree", "editor_get_node", "editor_get_layout", "project_capabilities"] as const) {
+test("editor bridge read tools stay read-only, write tools never claim readOnly", () => {
+  // 依据 docs/GODOT_NATIVE_BRIDGE.md:读侧(editor_get_* 读 + project_capabilities)只读;
+  // 写侧(UndoRedo 写入 / 选择 / 撤销重做)必须声明 readOnly=false,否则客户端会自动放行。
+  for (const name of ["editor_get_scene", "editor_get_tree", "editor_get_node", "editor_get_layout", "editor_get_events", "project_capabilities"] as const) {
     assert.equal(byName(name).annotations.readOnly, true, `${name} reads the editor and must stay readOnly`);
+  }
+  for (const name of ["editor_set_property", "editor_add_node", "editor_remove_node", "editor_select_node", "editor_undo", "editor_redo"] as const) {
+    assert.equal(byName(name).annotations.readOnly, false, `${name} mutates editor state and must not be readOnly`);
   }
 });
 
@@ -206,11 +215,11 @@ test("P1-B: dependency is only none / godot / bridge", () => {
   assert.deepEqual(illegalSource.map((b) => `${b.name} (${b.file})`), []);
 });
 
-test("P1-B: dependency classification matches the audited baseline (40 none / 17 godot / 5 bridge)", () => {
+test("P1-B: dependency classification matches the audited baseline (40 none / 17 godot / 12 bridge)", () => {
   const counts: Record<string, number> = {};
   for (const tool of allTools) counts[tool.dependency] = (counts[tool.dependency] ?? 0) + 1;
-  assert.deepEqual(counts, { none: 40, godot: 17, bridge: 5 }, `actual classification: ${JSON.stringify(counts)}`);
-  assert.equal(allTools.length, 62, "the audited baseline covers exactly 62 tools");
+  assert.deepEqual(counts, { none: 40, godot: 17, bridge: 12 }, `actual classification: ${JSON.stringify(counts)}`);
+  assert.equal(allTools.length, 69, "the audited baseline covers exactly 69 tools");
 });
 
 test("P1-B: every tool matches its domain default or an explicit exception", () => {
@@ -234,11 +243,15 @@ test("P1-B: domain and dependency are independent dimensions", () => {
 
 test("P1-B: editor domain tools and project_capabilities depend on the bridge", () => {
   for (const tool of allTools.filter((t) => t.domain === "editor")) {
-    assert.equal(tool.dependency, "bridge", `${tool.name} reads the running editor and must depend on the bridge`);
+    assert.equal(tool.dependency, "bridge", `${tool.name} talks to the running editor and must depend on the bridge`);
   }
   assert.equal(dependencyOf("project_capabilities"), "bridge", "project domain, but it needs the Editor Bridge");
   const bridgeTools = allTools.filter((t) => t.dependency === "bridge").map((t) => t.name).sort();
-  assert.deepEqual(bridgeTools, ["editor_get_layout", "editor_get_node", "editor_get_scene", "editor_get_tree", "project_capabilities"]);
+  assert.deepEqual(bridgeTools, [
+    "editor_add_node", "editor_get_events", "editor_get_layout", "editor_get_node", "editor_get_scene",
+    "editor_get_tree", "editor_redo", "editor_remove_node", "editor_select_node", "editor_set_property",
+    "editor_undo", "project_capabilities",
+  ]);
 });
 
 test("P1-B: engine-backed tools (class / node info / validate / runtime probes) depend on godot", () => {

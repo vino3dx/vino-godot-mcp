@@ -77,7 +77,7 @@ test("minimal real tools through the composition root", async () => {
   // 所以显式要求 full(预设本身的筛选行为见 toolSelection.test.ts)。
   const h = buildHost(quiet, { VINO_GODOT_MCP_PRESET: "full" });
   assert.deepEqual(h.listTools().map((x) => x.name).sort(), [
-    "asset_get_info", "asset_list", "class_get_info", "class_search", "class_validate_member", "editor_get_layout", "editor_get_node", "editor_get_scene", "editor_get_tree", "project_apply_changes", "project_capabilities", "project_check_changes", "project_get_config", "project_init", "project_input_get", "project_input_update", "project_set_config", "project_validate",
+    "asset_get_info", "asset_list", "class_get_info", "class_search", "class_validate_member", "editor_add_node", "editor_get_events", "editor_get_layout", "editor_get_node", "editor_get_scene", "editor_get_tree", "editor_redo", "editor_remove_node", "editor_select_node", "editor_set_property", "editor_undo", "project_apply_changes", "project_capabilities", "project_check_changes", "project_get_config", "project_init", "project_input_get", "project_input_update", "project_set_config", "project_validate",
     "resource_add_or_update_external", "resource_check_uid", "resource_get_info", "resource_update_property",
     "runtime_capture_screenshot", "runtime_check_addon_status", "runtime_export_project", "runtime_get_session", "runtime_get_version", "runtime_inspect_ui", "runtime_read_session_logs", "runtime_run_project", "runtime_run_scene", "runtime_start_session", "runtime_stop_session", "runtime_visual_debug",
     "scene_add_node", "scene_add_to_group", "scene_add_visual_node", "scene_analyze_connections", "scene_connect_signal", "scene_disconnect_signal",

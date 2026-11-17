@@ -41,11 +41,35 @@ export interface EditorSceneTreeParams { projectPath?: string; nodePath?: string
 export interface EditorNodeInfoParams { projectPath?: string; nodePath?: string; properties?: "none" | "list" | "values"; propertyNames?: string[]; maxProperties?: number }
 export interface EditorLayoutParams { projectPath?: string; nodePath?: string; nodePaths?: string[] }
 
+/** Editor 推送给 MCP 的事件（seq 在本次 Editor 会话内单调递增）。 */
+export interface EditorEvent { seq: number; type: string; at: number; data: Record<string, unknown> }
+
+export interface EditorEventQuery { sinceSeq?: number; limit?: number; types?: string[] }
+
+export interface EditorEventsPayload {
+  events: EditorEvent[];
+  nextSeq: number;
+  buffered: number;
+  dropped: number;
+  filteredTypes?: string[];
+  state?: Record<string, unknown>;
+  logCapture?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface EditorSetPropertyParams { nodePath: string; property: string; value: unknown; valueType?: string }
+export interface EditorAddNodeParams { parentPath: string; type: string; name?: string; properties?: Record<string, unknown> }
+export interface EditorRemoveNodeParams { nodePath: string }
+export interface EditorSelectNodeParams { nodePath?: string; nodePaths?: string[] }
+
 /** 插件侧错误码里可以原样上抛的(其余视为协议层问题)。 */
 const PASS_THROUGH: ReadonlySet<string> = new Set<ErrorCode>([
   "BRIDGE_UNAVAILABLE", "BRIDGE_DISCONNECTED", "BRIDGE_TIMEOUT", "BRIDGE_PROTOCOL_ERROR",
   "EDITOR_NO_SCENE_OPEN", "EDITOR_SCENE_ROOT_MISSING", "EDITOR_NODE_NOT_FOUND",
   "EDITOR_OBJECT_INVALID", "EDITOR_RESPONSE_TOO_LARGE",
+  // 写入通道(全部由插件侧判定，不在这里猜)
+  "EDITOR_PROPERTY_UNKNOWN", "EDITOR_PROPERTY_INVALID", "EDITOR_NODE_EXISTS", "EDITOR_NODE_TYPE_UNKNOWN",
+  "EDITOR_HISTORY_EMPTY", "EDITOR_WRITE_UNAVAILABLE", "EDITOR_CANNOT_REMOVE_ROOT", "EDITOR_SELECTION_UNAVAILABLE",
 ]);
 
 export class NativeBridgeService {
@@ -70,6 +94,74 @@ export class NativeBridgeService {
 
   async getEditorLayout(root: string, params: EditorLayoutParams = {}): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
     return this.editorCall<EditorEnvelope>(root, "editor_control_layout", compact(params));
+  }
+
+  /**
+   * 事件回灌：推送缓冲 + Editor 环形缓冲按 seq 合并去重。
+   *
+   * 为什么两路都要：MCP 进程不是时刻连着 Editor（stdio 会话可能刚起），
+   * 这期间事件只留在 Editor 的环形缓冲里；连接活着时推送会先到。
+   * 两次来源重叠的部分按 seq 去掉，返回顺序始终是 seq 升序。
+   */
+  async getEditorEvents(root: string, query: EditorEventQuery = {}): Promise<{ data: EditorEventsPayload & { sinceSeq: number; returned: number; hasMore: boolean; pushed: ReturnType<NativeBridgeClient["eventsState"]>; sources: Record<string, number> }; transport: BridgeTransport }> {
+    const { client } = this.clientFor(root);
+    const sinceSeq = Math.max(0, Math.trunc(query.sinceSeq ?? 0));
+    const limit = Math.min(200, Math.max(1, Math.trunc(query.limit ?? 100)));
+    const types = query.types ?? [];
+    const matchesType = (type: string) => types.length === 0 || types.includes(type);
+    const pushed = client.drainEvents().filter((e) => e.seq > sinceSeq && matchesType(e.type));
+    const pushedState = client.eventsState();
+    const { data, transport } = await this.editorCall<EditorEventsPayload>(root, "editor_events", { sinceSeq, limit, types });
+    const fromEditor = (data.events ?? []).filter((e) => e.seq > sinceSeq && matchesType(e.type));
+    const bySeq = new Map<number, EditorEvent>();
+    for (const event of [...fromEditor, ...pushed]) if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
+    const merged = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+    const page = merged.slice(0, limit);
+    return {
+      data: {
+        ...data,
+        events: page,
+        returned: page.length,
+        hasMore: merged.length > page.length,
+        sinceSeq,
+        pushed: pushedState,
+        sources: { editorBuffer: fromEditor.length, pushedBuffer: pushed.length, merged: merged.length },
+      },
+      transport,
+    };
+  }
+
+  async setEditorNodeProperty(root: string, params: EditorSetPropertyParams): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_set_node_property", compact({
+      nodePath: params.nodePath,
+      property: params.property,
+      value: encodeValueSpec(params.value, params.valueType),
+    }));
+  }
+
+  async addEditorNode(root: string, params: EditorAddNodeParams): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_add_node", compact({
+      parentPath: params.parentPath,
+      type: params.type,
+      name: params.name,
+      properties: params.properties,
+    }));
+  }
+
+  async removeEditorNode(root: string, params: EditorRemoveNodeParams): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_remove_node", compact({ nodePath: params.nodePath }));
+  }
+
+  async selectEditorNode(root: string, params: EditorSelectNodeParams): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_select_node", compact({ nodePath: params.nodePath, nodePaths: params.nodePaths }));
+  }
+
+  async undoEditor(root: string, steps = 1): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_undo", { steps });
+  }
+
+  async redoEditor(root: string, steps = 1): Promise<{ data: EditorEnvelope; transport: BridgeTransport }> {
+    return this.editorCall<EditorEnvelope>(root, "editor_redo", { steps });
   }
 
   private clientFor(root: string): { client: NativeBridgeClient; descriptorPath: string } {
@@ -160,4 +252,13 @@ function compact(params: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(params)) { if (v !== undefined) out[k] = v; }
   return out;
+}
+
+/**
+ * valueType 显式给出时包成 {valueType, value}，由插件按该类型构造 Variant；
+ * 不给就原样透传，插件按目标属性的真实类型解释（Vector2 属性收到 {x,y} 即可）。
+ */
+function encodeValueSpec(value: unknown, valueType: string | undefined): unknown {
+  if (valueType === undefined || valueType === "") return value;
+  return { valueType, value };
 }

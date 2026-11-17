@@ -13,7 +13,7 @@
 
 **AI-oriented semantic operation MCP for Godot 4.6.3+**
 The product goal is to let an agent understand, inspect, create, modify, organize, and validate Godot scenes, nodes, signals, groups, resources, and project settings.
-The current implementation provides a safe offline file channel plus a **read-only** Editor Bridge for live editor state; an authoritative Godot-native **write** channel is the next architectural milestone.
+The current implementation provides a safe offline file channel plus a two-way Editor Bridge: live reads, pushed events (scene tree / selection / logs) and **UndoRedo-backed** writes into the running editor. Persisting to disk stays with the file channel.
 Runtime Adapter only calls Godot CLI when engine-dependent capabilities are required.
 
 ---
@@ -61,11 +61,13 @@ Create nodes at runtime only for content that is genuinely dynamic.
 
 Tools follow the same split: `scene_add_node`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_update_node_property` and `scene_connect_signal` write the scene; `script_create` and `script_update_function` write logic. A new scene starts from a minimal `[gd_scene format=3]` bootstrap written with `script_create`, then its nodes are added with the scene tools — `scene_create` is not part of this version.
 
-### Editor Bridge (read-only)
+### Editor Bridge (read + write)
 
-`editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` and `project_capabilities` read the scene that is **currently open in a running Godot Editor** through an EditorPlugin + localhost TCP bridge. They need the addon in `godot_test/addons/vino-godot-mcp/` enabled in that project and a running Editor; otherwise they fail with `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`.
+`editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout`, `editor_get_events` and `project_capabilities` read the scene that is **currently open in a running Godot Editor** through an EditorPlugin + localhost TCP bridge. They need the addon in `godot_test/addons/vino-godot-mcp/` enabled in that project and a running Editor; otherwise they fail with `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`.
 
-What the bridge does **not** do: it does not create, modify, save, undo/redo, or otherwise write Godot objects. All scene/resource writes still go through the TypeScript parser + safe file write channel (`dryRun`, `expectedHash`, protected paths), and the engine-native write channel is **not implemented**. See [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md).
+Reads are live: values come from the in-memory scene instance, so unsaved edits are visible and can differ from the `.tscn` on disk. The plugin also **pushes events** while a bridge connection is open (scene open/close/save, in-memory scene tree changes, editor selection + Inspector focus, undo-history changes, and Godot Error/Warning log lines captured via `OS.add_logger`). Events survive disconnects in a bounded ring buffer and are read back with the monotonic `seq` cursor by `editor_get_events`.
+
+Writes: `editor_set_property`, `editor_add_node`, `editor_remove_node`, `editor_select_node`, `editor_undo` and `editor_redo` mutate the **editor's in-memory scene** through `EditorUndoRedoManager` — the same history `Ctrl+Z` uses in Godot — so the developer can undo every agent step with the native shortcut. They never save the scene file and never touch the `.godot` metadata; picking `UndoRedo` over raw mutation is what makes the write channel reversible instead of surprising. Saving the `.tscn`, and every write that must land on disk, still goes through the TypeScript parser + safe file write channel (`dryRun`, `expectedHash`, protected paths). See [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md).
 
 ### Install from npm (recommended)
 
@@ -130,7 +132,7 @@ vino-godot-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.3" listening on stdio, 62 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.3" listening on stdio, 69 tools exposed
 ```
 
 to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The count above is the `full` preset (everything in `src/tools/index.ts`); narrower presets and `VINO_GODOT_MCP_GROUPS` expose fewer tools. You normally never run it by hand — your AI client launches it after the configuration below.
@@ -175,7 +177,7 @@ exposed = preset (dependency range) ∩ groups (domain range)
 |---|---|---|
 | `default` | `none` | Node + project files only: parse/patch `.tscn`/`.tres`/`.gd`, read project settings. Works with no Godot installed and no editor open. |
 | `runtime` | `none` + `godot` | adds everything that runs or probes the Godot engine (headless runs, ClassDB dump, project validation, runtime sessions). |
-| `editor` | `none` + `bridge` | adds the live Editor Bridge readers (`editor_*`, `project_capabilities`). |
+| `editor` | `none` + `bridge` | adds the live Editor Bridge: readers, event stream and UndoRedo writers (`editor_*`, `project_capabilities`). |
 | `full` | `none` + `godot` + `bridge` | everything the build can do. |
 
 ```json
@@ -297,7 +299,7 @@ Runtime and editor tools are **not exposed by the default preset**: they require
 | Utility | `utility_ping`, `utility_task_status` |
 | Runtime | `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot`, `runtime_inspect_ui`, `runtime_check_addon_status`, `runtime_visual_debug`, `runtime_start_session`, `runtime_get_session`, `runtime_read_session_logs`, `runtime_stop_session` |
 | Project | `project_capabilities`, `project_init`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_check_changes`, `project_input_get`, `project_input_update` |
-| Editor (read-only) | `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` — require the Editor addon plus a running Godot Editor |
+| Editor (read + write) | `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout`, `editor_get_events`, `editor_set_property`, `editor_add_node`, `editor_remove_node`, `editor_select_node`, `editor_undo`, `editor_redo` — require the Editor addon plus a running Godot Editor; writes go through `EditorUndoRedoManager` and are undone by `Ctrl+Z` |
 | Scene | `scene_get_tree`, `scene_get_node_info`, `scene_find_nodes`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_get_connections`, `scene_analyze_connections`, `scene_update_signal_connection`, `scene_update_node_property`, `scene_remove_node`, `scene_add_node`, `scene_reparent_node`, `scene_add_to_group`, `scene_remove_from_group`, `scene_instantiate_scene`, `scene_connect_signal`, `scene_disconnect_signal` |
 | Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external`, `resource_check_uid` |
 | Shader | `shader_get_info`, `shader_update_uniform_default` |
@@ -317,7 +319,7 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 | Document | Description |
 |----------|-------------|
-| `docs/GODOT_NATIVE_BRIDGE.md` | Native read-only Editor Bridge: framing, boundaries, and the not-yet-implemented write channel |
+| `docs/GODOT_NATIVE_BRIDGE.md` | Native Editor Bridge: framing, event push, UndoRedo write channel and its boundaries |
 
 ### Contact
 
@@ -365,11 +367,13 @@ Vino Godot MCP 遵循 **Scene-First（场景优先）** 原则：Godot 工程的
 
 工具遵循同一分工：`scene_add_node`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_update_node_property`、`scene_connect_signal` 写场景；`script_create`、`script_update_function` 写逻辑。新场景先用 `script_create` 写最小 `[gd_scene format=3]` 引导骨架，再用场景工具添加节点；`scene_create` 不属于本版本。
 
-### 编辑器桥（只读）
+### 编辑器桥（读写）
 
-`editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` 与 `project_capabilities` 通过 EditorPlugin + 本地 TCP 桥读取**正在运行的 Godot 编辑器中当前打开的场景**。使用前提是该工程启用了 `godot_test/addons/vino-godot-mcp/` 插件并开着编辑器，否则返回 `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`。
+`editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout`、`editor_get_events` 与 `project_capabilities` 通过 EditorPlugin + 本地 TCP 桥读取**正在运行的 Godot 编辑器中当前打开的场景**。使用前提是该工程启用了 `godot_test/addons/vino-godot-mcp/` 插件并开着编辑器，否则返回 `BRIDGE_UNAVAILABLE` / `BRIDGE_DISCONNECTED`。
 
-这个桥**不做**什么：不创建、不修改、不保存、不进 Undo/Redo，也不写任何 Godot 对象。所有场景/资源写入仍然走 TypeScript 解析器 + 安全文件写入通道（`dryRun`、`expectedHash`、受保护路径），引擎原生写入通道**尚未实现**。详见 [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md)。
+读的是编辑器内存里的场景实例：未保存的修改在结果里可见，可能与磁盘 `.tscn` 不一致。连接存在时插件还会**主动推送事件**（场景打开/关闭/保存、内存场景树变化、编辑器选中节点与 Inspector 焦点、Undo 历史变化，以及通过 `OS.add_logger` 捕获的 Godot Error/Warning 日志）；事件在环形缓冲里按单调 `seq` 保存，断开期间也不丢，`editor_get_events` 用 `sinceSeq` 游标补齐。
+
+写入方面：`editor_set_property`、`editor_add_node`、`editor_remove_node`、`editor_select_node`、`editor_undo`、`editor_redo` 改动的是**编辑器内存中的场景**，且全部经过 `EditorUndoRedoManager`——也就是 Godot 里 `Ctrl+Z` 使用的那条历史，所以开发者用原生快捷键就能撤销 AI 的每一步。它们不保存场景文件，也不碰 `.godot` 元数据；选择 UndoRedo 而不是直接改对象，就是为了让写通道可撤销、不惊悚。保存 `.tscn` 以及任何必须落到磁盘的修改，仍然走 TypeScript 解析器 + 安全文件写入通道（`dryRun`、`expectedHash`、受保护路径）。详见 [`docs/GODOT_NATIVE_BRIDGE.md`](docs/GODOT_NATIVE_BRIDGE.md)。
 
 ### 从 npm 安装（推荐）
 
@@ -434,7 +438,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.3" listening on stdio, 62 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.3" listening on stdio, 69 tools exposed
 ```
 
 然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。上面这个数量对应 `full` 预设（`src/tools/index.ts` 的全部工具）；更窄的预设与 `VINO_GODOT_MCP_GROUPS` 会暴露更少的工具。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
@@ -479,7 +483,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 |---|---|---|
 | `default` | `none` | 只用 Node 与工程文件：解析/改写 `.tscn`/`.tres`/`.gd`、读取项目设置。不需要安装 Godot，也不需要打开编辑器。 |
 | `runtime` | `none` + `godot` | 追加所有需要运行或探测 Godot 引擎的工具（headless 运行、ClassDB dump、工程校验、运行时会话）。 |
-| `editor` | `none` + `bridge` | 追加读取运行中编辑器的工具（`editor_*`、`project_capabilities`）。 |
+| `editor` | `none` + `bridge` | 追加运行中编辑器的读取、事件流与 UndoRedo 写入工具（`editor_*`、`project_capabilities`）。 |
 | `full` | `none` + `godot` + `bridge` | 本版本支持的全部工具。 |
 
 ```json
@@ -601,7 +605,7 @@ Runtime 与 editor 工具**不在默认预设中**：需要设置 `VINO_GODOT_MC
 | Utility | `utility_ping`、`utility_task_status` |
 | Runtime | `runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot`、`runtime_inspect_ui`、`runtime_check_addon_status`、`runtime_visual_debug`、`runtime_start_session`、`runtime_get_session`、`runtime_read_session_logs`、`runtime_stop_session` |
 | Project | `project_capabilities`、`project_init`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_check_changes`、`project_input_get`、`project_input_update` |
-| Editor（只读） | `editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` —— 需要启用编辑器插件并保持 Godot 编辑器运行 |
+| Editor（读写） | `editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout`、`editor_get_events`、`editor_set_property`、`editor_add_node`、`editor_remove_node`、`editor_select_node`、`editor_undo`、`editor_redo` —— 需要启用编辑器插件并保持 Godot 编辑器运行；写入经 `EditorUndoRedoManager`，可在 Godot 里用 `Ctrl+Z` 撤销 |
 | Scene | `scene_get_tree`、`scene_get_node_info`、`scene_find_nodes`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_get_connections`、`scene_analyze_connections`、`scene_update_signal_connection`、`scene_update_node_property`、`scene_remove_node`、`scene_add_node`、`scene_reparent_node`、`scene_add_to_group`、`scene_remove_from_group`、`scene_instantiate_scene`、`scene_connect_signal`、`scene_disconnect_signal` |
 | Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external`、`resource_check_uid` |
 | Shader | `shader_get_info`、`shader_update_uniform_default` |
@@ -621,7 +625,7 @@ MCP Layer → Tool Layer → Service Layer → Core/Parser → FileSystem
 
 | 文档 | 说明 |
 |------|------|
-| `docs/GODOT_NATIVE_BRIDGE.md` | 原生只读编辑器桥：通信帧格式、能力边界、尚未实现的写入通道 |
+| `docs/GODOT_NATIVE_BRIDGE.md` | 原生编辑器桥：通信帧格式、事件推送、UndoRedo 写入通道与能力边界 |
 
 ### 联系方式
 

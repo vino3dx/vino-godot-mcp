@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import net from "node:net";
-import { BRIDGE_PROTOCOL_VERSION, DEFAULT_BRIDGE_TIMEOUT_MS, FrameDecoder, isBridgeResponse, makeRequest, encodeFrame, type BridgeResponse } from "./protocol.js";
+import { BRIDGE_PROTOCOL_VERSION, DEFAULT_BRIDGE_TIMEOUT_MS, FrameDecoder, MAX_BUFFERED_EVENTS, isBridgeEvent, isBridgeResponse, makeRequest, encodeFrame, type BridgeEvent, type BridgeResponse } from "./protocol.js";
 
 export class NativeBridgeError extends Error {
   constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) { super(message); this.name = "NativeBridgeError"; }
@@ -39,10 +39,27 @@ export function readBridgeDescriptor(descriptorPath: string): BridgeDescriptor {
 export class NativeBridgeClient {
   private socket?: net.Socket; private decoder = new FrameDecoder(); private pending = new Map<string, { resolve: (r: BridgeResponse) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private descriptor?: BridgeDescriptor;
+  /** Editor 推送过来的事件（有界）。权威数据仍在 Editor 环形缓冲里，这里只是快路径。 */
+  private events: BridgeEvent[] = [];
+  private lastEventSeq = 0;
+  private droppedEvents = 0;
+  private receivedEvents = 0;
   constructor(private readonly options: NativeBridgeClientOptions) {}
 
   /** 连接后实际使用的 descriptor(含 pid/projectPath),调用方据此报告传输层身份。 */
   getDescriptor(): BridgeDescriptor | undefined { return this.descriptor; }
+
+  /** 取走并清空已推送的事件（按 seq 升序）。 */
+  drainEvents(): BridgeEvent[] {
+    const out = this.events;
+    this.events = [];
+    return out;
+  }
+
+  /** 推送通道的观测值：不改变缓冲。 */
+  eventsState(): { buffered: number; lastSeq: number; dropped: number; received: number } {
+    return { buffered: this.events.length, lastSeq: this.lastEventSeq, dropped: this.droppedEvents, received: this.receivedEvents };
+  }
 
   async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     const descriptor = this.readDescriptor(); const socket = await this.connect(descriptor); const request = makeRequest(descriptor.token, method, params);
@@ -55,6 +72,9 @@ export class NativeBridgeClient {
   }
 
   close(): void { this.socket?.destroy(); this.socket = undefined; this.decoder = new FrameDecoder(); }
+
+  /** seq 是会话内部的，换一个 Editor 会话就必须丢掉旧事件，否则会和张冠李戴的 seq 去重。 */
+  private clearEvents(): void { this.events = []; this.lastEventSeq = 0; this.droppedEvents = 0; this.receivedEvents = 0; }
   private readDescriptor(): BridgeDescriptor {
     const raw = readBridgeDescriptor(this.options.descriptorPath);
     if (raw.protocolVersion !== undefined && raw.protocolVersion !== BRIDGE_PROTOCOL_VERSION) {
@@ -64,13 +84,32 @@ export class NativeBridgeClient {
   }
   private connect(d: BridgeDescriptor): Promise<net.Socket> {
     if (this.socket && !this.socket.destroyed && this.descriptor?.sessionId === d.sessionId) return Promise.resolve(this.socket);
+    const sameSession = this.descriptor?.sessionId === d.sessionId;
     this.close(); this.descriptor = d;
+    if (!sameSession) this.clearEvents();
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ host: d.host, port: d.port }); const fail = (e: Error) => { socket.destroy(); this.rejectPending(e); reject(new NativeBridgeError("BRIDGE_DISCONNECTED", e.message, { host: d.host, port: d.port, pid: d.pid ?? null })); };
       socket.once("connect", () => { this.socket = socket; resolve(socket); }); socket.once("error", fail); socket.on("close", () => { if (this.socket === socket) this.socket = undefined; this.rejectPending(new NativeBridgeError("BRIDGE_DISCONNECTED", "Godot Bridge connection closed", { host: d.host, port: d.port, pid: d.pid ?? null })); });
-      socket.on("data", (chunk) => { try { for (const value of this.decoder.push(chunk)) this.handleResponse(value); } catch (e) { fail(e instanceof Error ? e : new Error(String(e))); } });
+      socket.on("data", (chunk) => { try { for (const value of this.decoder.push(chunk)) this.handleFrame(value); } catch (e) { fail(e instanceof Error ? e : new Error(String(e))); } });
     });
   }
-  private handleResponse(value: unknown): void { if (!isBridgeResponse(value)) return; const p = this.pending.get(value.requestId); if (!p) return; clearTimeout(p.timer); this.pending.delete(value.requestId); p.resolve(value); }
+  /** 一帧要么是某请求的应答，要么是 Editor 主动推送的事件；两者互斥。 */
+  private handleFrame(value: unknown): void {
+    if (isBridgeResponse(value)) {
+      const p = this.pending.get(value.requestId); if (!p) return;
+      clearTimeout(p.timer); this.pending.delete(value.requestId); p.resolve(value);
+      return;
+    }
+    if (!isBridgeEvent(value)) return;
+    const event = value.event;
+    // 事件按 seq 单调；重复帧（推送与 editor_events 补齐重叠时）在服务层按 seq 去重。
+    if (event.seq > this.lastEventSeq) this.lastEventSeq = event.seq;
+    this.receivedEvents += 1;
+    this.events.push(event);
+    if (this.events.length > MAX_BUFFERED_EVENTS) {
+      this.events.shift();
+      this.droppedEvents += 1;
+    }
+  }
   private rejectPending(error: Error): void { for (const [id, p] of this.pending) { clearTimeout(p.timer); p.reject(error); this.pending.delete(id); } }
 }

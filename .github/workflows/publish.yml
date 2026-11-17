@@ -2,14 +2,20 @@
 name: Publish to npm and GitHub Release
 
 on:
-  # 当默认分支的 package.json 更新时，检查是否有新版本
+  # 默认分支相关源码或版本更新时触发
   push:
     branches:
       - main
     paths:
       - "package.json"
-      # 本文件改动时也重跑:发布步骤是幂等的(已存在的 Release 只对齐标题),
-      # 这样修正标题/发布逻辑后不需要手动点 Run workflow。
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "server.json"
+      - "src/**"
+      - "addons/vino_godot_mcp/**"
+      - "godot_test/addons/vino-godot-mcp/**"
+      - "README.md"
+      - "LICENSE"
       - ".github/workflows/publish.yml"
 
   # 支持手动触发
@@ -47,7 +53,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 4. 运行测试（当前 npm test 已包含 TypeScript 构建）
+      # 4. 运行测试
+      # 当前 npm test 已包含 TypeScript 构建
       - name: Run tests
         run: npm test
 
@@ -67,6 +74,11 @@ jobs:
             exit 1
           fi
 
+          if [[ -z "$PACKAGE_NAME" ]]; then
+            echo "::error::Missing npm package name"
+            exit 1
+          fi
+
           echo "Package: $PACKAGE_NAME"
           echo "Version: $VERSION"
           echo "Tag: $TAG"
@@ -74,11 +86,9 @@ jobs:
           echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          # GitHub Release 的显示名称与 Git tag 分开:tag 保持 v1.2.3(不含空格),
-          # Release 标题统一为 "Vino Godot MCP v1.2.3"。
           echo "release_name=Vino Godot MCP v${VERSION}" >> "$GITHUB_OUTPUT"
 
-          # 检查 Git Tag 是否存在
+          # 检查 Git Tag
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             TAG_EXISTS=true
             echo "Git tag $TAG already exists."
@@ -86,7 +96,7 @@ jobs:
             TAG_EXISTS=false
           fi
 
-          # 检查 npm 上是否已经存在该版本
+          # 检查 npm 版本
           if npm view "${PACKAGE_NAME}@${VERSION}" version >/dev/null 2>&1; then
             NPM_EXISTS=true
             echo "npm version $VERSION already exists."
@@ -94,49 +104,199 @@ jobs:
             NPM_EXISTS=false
           fi
 
-          # npm 版本已存在但 Git Tag 不存在：
-          # 视为已经发布过的版本，避免普通更新重复创建版本 Tag
-          if [[ "$NPM_EXISTS" == "true" && "$TAG_EXISTS" == "false" ]]; then
-            echo "::notice::Version $VERSION is already published to npm. Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
           echo "npm_exists=$NPM_EXISTS" >> "$GITHUB_OUTPUT"
 
-          # 如果 Tag 不存在，则自动创建并推送
-          if [[ "$TAG_EXISTS" == "false" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-            git tag "$TAG" "$GITHUB_SHA"
-            git push origin "$TAG"
-
-            echo "Created and pushed tag: $TAG"
+          # 如果 npm 已存在但 Git Tag 不存在，
+          # 不重复创建版本 Tag，跳过 npm 发布。
+          # GitHub Release 和安装包仍然可以继续处理。
+          if [[ "$NPM_EXISTS" == "true" && "$TAG_EXISTS" == "false" ]]; then
+            echo "::notice::npm version already exists. Skip npm publishing."
+            echo "skip_npm=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_npm=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 6. 发布 npm
+      # 6. 创建并推送 Git Tag
+      - name: Create and push Git tag
+        if: steps.version.outputs.tag_exists == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+
+          echo "Created and pushed tag: $TAG"
+
+      # 7. 发布 npm
       - name: Publish to npm
-        if: steps.version.outputs.skip != 'true' && steps.version.outputs.npm_exists != 'true'
+        if: steps.version.outputs.skip_npm != 'true'
         run: npm publish --provenance
 
-      # 7. 创建 GitHub Release(标题固定为 "Vino Godot MCP v<version>")
-      - name: Create GitHub Release
-        if: steps.version.outputs.skip != 'true'
+      # 8. 构建两个安装包
+      - name: Build release packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          # ========================================
+          # A. Godot Dock Plugin
+          # ========================================
+
+          PLUGIN_SOURCE="godot_test/addons/vino-godot-mcp"
+
+          if [[ ! -d "$PLUGIN_SOURCE" ]]; then
+            echo "::error::Godot plugin directory not found: $PLUGIN_SOURCE"
+            exit 1
+          fi
+
+          if [[ ! -f "$PLUGIN_SOURCE/plugin.cfg" ]]; then
+            echo "::error::plugin.cfg not found"
+            exit 1
+          fi
+
+          PLUGIN_STAGE="release/plugin-package"
+
+          mkdir -p "$PLUGIN_STAGE/addons"
+
+          cp -a "$PLUGIN_SOURCE" "$PLUGIN_STAGE/addons/vino-godot-mcp"
+
+          PLUGIN_ZIP="vino-godot-mcp-plugin-${VERSION}.zip"
+
+          (
+            cd "$PLUGIN_STAGE"
+            zip -qr "../${PLUGIN_ZIP}" addons
+          )
+
+          # ========================================
+          # B. MCP Server
+          # ========================================
+
+          if [[ ! -d "src" ]]; then
+            echo "::error::MCP Server source directory not found"
+            exit 1
+          fi
+
+          if [[ ! -d "dist" ]]; then
+            echo "::error::TypeScript output directory dist/ not found"
+            exit 1
+          fi
+
+          SERVER_STAGE="release/server-package/vino-godot-mcp-server"
+
+          mkdir -p "$SERVER_STAGE"
+
+          # Source code
+          cp -a src "$SERVER_STAGE/"
+
+          # Compiled TypeScript output
+          cp -a dist "$SERVER_STAGE/"
+
+          # Package manifests
+          cp package.json package-lock.json "$SERVER_STAGE/"
+
+          # MCP configuration
+          if [[ -f "server.json" ]]; then
+            cp server.json "$SERVER_STAGE/"
+          fi
+
+          # Documentation and license
+          for FILE in README.md LICENSE; do
+            if [[ -f "$FILE" ]]; then
+              cp "$FILE" "$SERVER_STAGE/"
+            fi
+          done
+
+          # Documentation directory
+          if [[ -d "docs" ]]; then
+            cp -a docs "$SERVER_STAGE/"
+          fi
+
+          SERVER_ZIP="vino-godot-mcp-server-${VERSION}.zip"
+
+          (
+            cd "release/server-package"
+            zip -qr "../${SERVER_ZIP}" vino-godot-mcp-server
+          )
+
+          # ========================================
+          # C. Verify packages
+          # ========================================
+
+          test -s "release/${PLUGIN_ZIP}"
+          test -s "release/${SERVER_ZIP}"
+
+          echo "Release packages generated:"
+          ls -lh release/*.zip
+
+          echo "Plugin ZIP: ${PLUGIN_ZIP}"
+          echo "Server ZIP: ${SERVER_ZIP}"
+
+      # 9. 创建或更新 GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_NAME: ${{ steps.version.outputs.release_name }}
         run: |
+          set -euo pipefail
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            # 已经发布过(例如历史版本用的是裸 tag 名):把标题对齐成统一格式。
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_NAME"
-            echo "GitHub Release $RELEASE_TAG already exists. Title set to: $RELEASE_NAME"
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_NAME"
+
+            echo "Updated existing Release: $RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_NAME" \
               --generate-notes
 
-            echo "Created GitHub Release: $RELEASE_NAME (tag $RELEASE_TAG)"
+            echo "Created Release: $RELEASE_NAME"
           fi
+
+      # 10. 上传两个安装包
+      - name: Upload release packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          gh release upload "$RELEASE_TAG" \
+            "release/vino-godot-mcp-plugin-${VERSION}.zip" \
+            "release/vino-godot-mcp-server-${VERSION}.zip" \
+            --clobber
+
+          echo "Release packages uploaded successfully."
+
+      # 11. 发布结果
+      - name: Publish summary
+        env:
+          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          {
+            echo "## Vino Godot MCP v${VERSION}"
+            echo
+            echo "### npm"
+            echo "- Package: ${PACKAGE_NAME}@${VERSION}"
+            echo
+            echo "### GitHub Release"
+            echo "- Tag: ${TAG}"
+            echo "- Plugin: vino-godot-mcp-plugin-${VERSION}.zip"
+            echo "- MCP Server: vino-godot-mcp-server-${VERSION}.zip"
+            echo
+            echo "### Installation packages"
+            echo "Both ZIP packages have been uploaded."
+          } >> "$GITHUB_STEP_SUMMARY"

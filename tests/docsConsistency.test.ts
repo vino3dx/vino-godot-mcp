@@ -64,23 +64,24 @@ test("English and Chinese Tool Matrix rows describe the same domains", () => {
   assert.deepEqual([...new Set(matrixTools(englishSection))].sort(), [...new Set(matrixTools(chineseSection))].sort());
 });
 
-test("README documents the read-only Editor Bridge and its dependency", () => {
-  assert.match(readme, /Editor Bridge \(read-only\)/);
-  assert.match(readme, /编辑器桥（只读）/);
+test("README documents the two-way Editor Bridge and its dependency", () => {
+  assert.match(readme, /Editor Bridge \(read \+ write\)/);
+  assert.match(readme, /编辑器桥（读写）/);
   assert.match(readme, /BRIDGE_UNAVAILABLE/);
-  // 不能暗示桥可以做原生写
-  assert.match(readme, /engine-native write channel is \*\*not implemented\*\*/i);
+  // 写通道的两条硬事实:走 UndoRedo(可 Ctrl+Z 撤销)且不落盘。
+  assert.match(readme, /EditorUndoRedoManager/);
+  assert.match(readme, /Ctrl\+Z/);
 });
 
-test("bridge doc reflects the implemented read-only channel and the missing write channel", () => {
+test("bridge doc reflects the implemented event push and UndoRedo write channel", () => {
   assert.equal(
     /No EditorPlugin or native object RPC endpoint is currently part of the repository/.test(bridgeDoc),
     false,
     "bridge doc still claims no EditorPlugin exists",
   );
-  assert.match(bridgeDoc, /read-only/i);
-  assert.match(bridgeDoc, /write channel uses the same framing but is not implemented/i);
-  assert.match(bridgeDoc, /engine-native \*\*write\*\* channel .* is NOT implemented/is);
+  assert.match(bridgeDoc, /EditorUndoRedoManager/);
+  assert.match(bridgeDoc, /editor_get_events/);
+  assert.equal(/NOT implemented/.test(bridgeDoc), false, "the write channel is implemented; the doc must not claim otherwise");
 });
 
 // P1-D: Scene-First 是共享策略,不是各写一份的文案。

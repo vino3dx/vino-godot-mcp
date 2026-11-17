@@ -18,6 +18,12 @@ import { editorGetScene } from "./editor/getScene.js";
 import { editorGetTree } from "./editor/getTree.js";
 import { editorGetNode } from "./editor/getNode.js";
 import { editorGetLayout } from "./editor/getLayout.js";
+import { editorGetEvents } from "./editor/getEvents.js";
+import { editorSetProperty } from "./editor/setProperty.js";
+import { editorAddNode } from "./editor/addNode.js";
+import { editorRemoveNode } from "./editor/removeNode.js";
+import { editorSelectNode } from "./editor/selectNode.js";
+import { editorUndo, editorRedo } from "./editor/history.js";
 import { sceneGetTree } from "./scene/getTree.js";
 import { sceneGetNodeInfo } from "./scene/getNodeInfo.js";
 import { sceneFindNodes } from "./scene/findNodes.js";
@@ -80,6 +86,13 @@ export const allTools: ToolDefinition<AppContext>[] = [
   editorGetTree,
   editorGetNode,
   editorGetLayout,
+  editorGetEvents,
+  editorSetProperty,
+  editorAddNode,
+  editorRemoveNode,
+  editorSelectNode,
+  editorUndo,
+  editorRedo,
   sceneGetTree,
   sceneGetNodeInfo,
   sceneFindNodes,

@@ -8,12 +8,24 @@ extends EditorPlugin
 # 长度字节序由引擎决定:PackedByteArray.encode_u32/decode_u32 固定小端
 # (Godot 4.6.3 实测:encode_u32(0, 65536) == [0,0,1,0])。
 #
-# 支持的方法:
+# 读取方法:
 #   project_capabilities      Bridge 与 Editor 能力/身份探测
-#   editor_scene_info         当前编辑场景 + 打开的场景 + 当前选择
+#   editor_scene_info         当前编辑场景 + 打开的场景 + 当前选择 + Inspector 焦点
 #   editor_scene_tree         当前编辑场景的节点树(深度/数量/内部节点可控)
 #   editor_node_info          单个节点信息 + 属性列表/属性值
 #   editor_control_layout     Control 布局(anchors/offsets/尺寸/容器语义)
+#   editor_events             事件回灌(环形缓冲,按 seq 补齐,断开期间不丢)
+#
+# 写入方法(全部走 EditorUndoRedoManager,与 Ctrl+Z 同一条历史):
+#   editor_set_node_property  改单个属性
+#   editor_add_node           新增节点(带初始属性)
+#   editor_remove_node        删除节点
+#   editor_select_node        改变编辑器选择/Inspector 焦点(不进 undo 历史)
+#   editor_undo / editor_redo 在场景历史上撤销/重做
+#
+# 事件(Editor → MCP 的非请求帧,字段 {protocolVersion, sessionId, event}):
+#   scene_changed / scene_closed / scene_saved / scene_tree_changed /
+#   selection_changed / history_changed / log(Error+Warning,来自 OS.add_logger)
 #
 # 所有 editor_* 结果都在 data 里带 context="editor"、projectId、instanceId、
 # sessionId、scenePath、isValid,并明确标注数据来源。
@@ -21,6 +33,10 @@ extends EditorPlugin
 const PROTOCOL_VERSION := 1
 const DEFAULT_PORT := 49731
 const MAX_MESSAGE_BYTES := 1048576
+## 场景指纹轮询间隔(秒):编辑器没有"场景内容变化"的信号,靠轮询兜住
+## 不经过 undo 历史的改动(脚本驱动、外部重载等)。
+const SCENE_POLL_INTERVAL := 0.4
+const MAX_PUSH_TREE_NODES := 200
 
 # 读取上限:大型场景不得无限制递归,也不能让单个响应超过帧上限把连接撑断。
 const DEFAULT_MAX_DEPTH := 32
@@ -29,9 +45,6 @@ const DEFAULT_MAX_NODES := 1000
 const HARD_MAX_NODES := 5000
 const HARD_COUNT_NODES := 100000
 const MAX_PROPERTY_VALUES := 400
-const MAX_ARRAY_ITEMS := 64
-const MAX_NESTING_DEPTH := 3
-const MAX_STRING_CHARS := 4096
 
 const SOURCE_EDITOR := "Godot Editor Plugin (EditorInterface.get_edited_scene_root)"
 const DIRTY_REASON := "EditorInterface exposes no scene-dirty query in Godot 4.6; is_dirty is reported as null instead of guessed"
@@ -41,6 +54,14 @@ const ProjectCollector := preload("collectors/project_collector.gd")
 const SceneCollector := preload("collectors/scene_collector.gd")
 const NodeCollector := preload("collectors/node_collector.gd")
 const SelectionCollector := preload("collectors/selection_collector.gd")
+
+# 写入与事件：值编解码只保留一份实现，写入历史与读取输出共用。
+const ValueCodec := preload("core/value_codec.gd")
+const EventHub := preload("core/event_hub.gd")
+const LogCapture := preload("core/log_capture.gd")
+const EditorWriter := preload("core/editor_writer.gd")
+
+const EVENT_TYPES := ["scene_changed", "scene_closed", "scene_saved", "scene_tree_changed", "selection_changed", "history_changed", "log"]
 
 const SETTING_AUTO_CONNECT := "vino_godot_mcp/auto_connect"
 const SETTING_LOG_LEVEL := "vino_godot_mcp/log_level"
@@ -64,6 +85,12 @@ var status_label: Label
 var status_icon: Label
 var reconnect_button: Button
 var log_level := "info"
+# 事件枢纽 / 日志订阅 / 场景指纹：Editor → MCP 的实时回灌通路。
+var events := EventHub.new()
+var log_capture: Logger
+var _poll_accum := 0.0
+var _scene_fingerprint := 0
+var _event_bridge_installed := false
 const MENU_STATUS := "Vino Godot MCP / Bridge Status"
 const MENU_PROJECT_PATH := "Vino Godot MCP / Copy Project Path"
 const MENU_DASHBOARD := "Vino Godot MCP / Open Dashboard"
@@ -81,6 +108,7 @@ func _enter_tree() -> void:
 	instance_id = session_id
 	project_id = str(ProjectSettings.get_setting("application/config/name", "unknown"))
 	descriptor_path = ProjectSettings.globalize_path("res://.vino-godot-mcp/bridge.json")
+	_install_event_bridge()
 	if is_auto_connect_enabled():
 		start_bridge()
 	else:
@@ -102,6 +130,7 @@ func _exit_tree() -> void:
 		dock.queue_free()
 		dock = null
 	tabs = null
+	_remove_event_bridge()
 	stop_bridge()
 
 # ---------------------------------------------------------------- Bridge 生命周期 / 设置项
@@ -112,11 +141,20 @@ func is_auto_connect_enabled() -> bool:
 func start_bridge() -> bool:
 	if server.is_listening():
 		return true
+	var configured := port
 	var err := server.listen(port, "127.0.0.1")
 	if err != OK:
-		push_error("Vino Godot MCP Bridge 无法监听 127.0.0.1:%d（%s）" % [port, error_string(err)])
-		_update_dashboard()
-		return false
+		# 同一台机器多开编辑器是常态,固定端口必然被先启动的实例占住。
+		# 退回到系统分配的临时端口:描述文件里的 port 才是权威,调用方从不假设固定端口。
+		var fallback := TCPServer.new()
+		var fallback_err := fallback.listen(0, "127.0.0.1")
+		if fallback_err != OK:
+			push_error("Vino Godot MCP Bridge 无法监听 127.0.0.1:%d（%s），临时端口也失败（%s）" % [configured, error_string(err), error_string(fallback_err)])
+			_update_dashboard()
+			return false
+		server = fallback
+		port = server.get_local_port()
+		_log("端口 %d 已被占用,改用临时端口 %d" % [configured, port], "warn")
 	DirAccess.make_dir_recursive_absolute(descriptor_path.get_base_dir())
 	_write_descriptor()
 	_log("Bridge 已监听 127.0.0.1:%d" % port, "info")
@@ -323,12 +361,18 @@ func _update_dashboard() -> void:
 	status_label.text = "Bridge 正在监听" if working else "Bridge 未启动"
 	reconnect_button.text = "重新连接"
 
-func _process(_delta: float) -> void:
-	if not server.is_connection_available():
-		return
-	peer = server.take_connection()
-	peer.set_no_delay(true)
-	input = PackedByteArray()
+func _process(delta: float) -> void:
+	if server.is_connection_available():
+		peer = server.take_connection()
+		if peer:
+			peer.set_no_delay(true)
+		input = PackedByteArray()
+	# 场景变更没有编辑器信号可用：轮询指纹兜住"不走 undo 历史"的改动。
+	_poll_accum += delta
+	if _poll_accum >= SCENE_POLL_INTERVAL:
+		_poll_accum = 0.0
+		_poll_scene(false)
+	_flush_events()
 
 func _random_token() -> String:
 	var bytes := PackedByteArray()
@@ -439,6 +483,20 @@ func _dispatch(method: String, params: Dictionary) -> Dictionary:
 			return _editor_node_info(params)
 		"editor_control_layout":
 			return _editor_control_layout(params)
+		"editor_events":
+			return _editor_events(params)
+		"editor_set_node_property":
+			return _editor_set_node_property(params)
+		"editor_add_node":
+			return _editor_add_node(params)
+		"editor_remove_node":
+			return _editor_remove_node(params)
+		"editor_select_node":
+			return _editor_select_node(params)
+		"editor_undo":
+			return _editor_history_step(params, true)
+		"editor_redo":
+			return _editor_history_step(params, false)
 	return _fail("METHOD_NOT_FOUND", "Unsupported bridge method: %s" % method, {"method": method})
 
 func _fail(code: String, message: String, details := {}) -> Dictionary:
@@ -478,7 +536,7 @@ func _capabilities() -> Dictionary:
 		"isDirtyReason": DIRTY_REASON,
 	}
 	data["unsavedStateApi"] = "unavailable"
-	data["bridgeMethods"] = ["project_capabilities", "editor_scene_info", "editor_scene_tree", "editor_node_info", "editor_control_layout"]
+	data["bridgeMethods"] = ["project_capabilities", "editor_scene_info", "editor_scene_tree", "editor_node_info", "editor_control_layout", "editor_events", "editor_set_node_property", "editor_add_node", "editor_remove_node", "editor_select_node", "editor_undo", "editor_redo"]
 	data["nativeCapabilities"] = {
 		"editor_context": true,
 		"editor_scene_inspect": true,
@@ -487,7 +545,14 @@ func _capabilities() -> Dictionary:
 		"editor_control_layout_inspect": true,
 		"editor_selection_inspect": true,
 		"editor_dirty_flag": false,
-		"editor_scene_write": false,
+		"editor_scene_write": true,
+		"editor_node_add": true,
+		"editor_node_remove": true,
+		"editor_selection_write": true,
+		"editor_undo_redo": true,
+		"editor_event_stream": true,
+		"editor_log_capture": log_capture != null and log_capture.is_installed(),
+		"editor_scene_save": false,
 		"editor_playback_control": false,
 		"runtime_context": false,
 		"disk_context": false,
@@ -495,6 +560,16 @@ func _capabilities() -> Dictionary:
 		"group_inspect": true,
 		"resource_write": false,
 	}
+	data["writeChannel"] = {
+		"undoOwner": "EditorUndoRedoManager (same history as Ctrl+Z)",
+		"methods": ["editor_set_node_property", "editor_add_node", "editor_remove_node", "editor_select_node", "editor_undo", "editor_redo"],
+		"savesFiles": false,
+		"note": "Writes mutate the in-memory edited scene and are undoable; saving the .tscn stays an explicit editor action.",
+	}
+	data["eventTypes"] = EVENT_TYPES
+	data["eventState"] = events.state()
+	data["logCapture"] = log_capture.state() if log_capture != null else {"installed": false}
+	data["history"] = EditorWriter.history_state(root)
 	return data
 
 # ---------------------------------------------------------------- scene info
@@ -543,6 +618,10 @@ func _editor_scene_info() -> Dictionary:
 	if viewport_size != null:
 		data["sceneViewportSize"] = viewport_size
 		data["sceneViewportSizeSource"] = "Viewport.get_visible_rect() of the editor viewport hosting the edited scene"
+	# 焦点 = 当前选中节点的路径 + Inspector 属性值(与 selection_changed 事件的 focus 同构)。
+	data["focus"] = _selection_focus(root)
+	data["history"] = EditorWriter.history_state(root)
+	data["eventState"] = events.state()
 	return data
 
 func _open_scenes() -> Array:
@@ -981,120 +1060,383 @@ func _viewport_size(node: Node):
 func _rect2(v: Rect2) -> Dictionary:
 	return {"x": v.position.x, "y": v.position.y, "w": v.size.x, "h": v.size.y}
 
+# 值编码只有一份实现(core/value_codec.gd):写入回执与读取结果共用同一套类型描述,
+# 避免"读出来是 Vector2、写进去变成字典"的错位。
 func _encode_value(value, depth: int) -> Dictionary:
-	if value == null:
-		return {"valueType": "Nil", "value": null}
-	match typeof(value):
-		TYPE_BOOL:
-			return {"valueType": "bool", "value": value}
-		TYPE_INT:
-			return {"valueType": "int", "value": value}
-		TYPE_FLOAT:
-			return {"valueType": "float", "value": value}
-		TYPE_STRING:
-			return {"valueType": "String", "value": _clip_string(value)}
-		TYPE_STRING_NAME:
-			return {"valueType": "StringName", "value": _clip_string(str(value))}
-		TYPE_NODE_PATH:
-			return {"valueType": "NodePath", "value": str(value)}
-		TYPE_VECTOR2:
-			return {"valueType": "Vector2", "value": _vec2(value)}
-		TYPE_VECTOR2I:
-			return {"valueType": "Vector2i", "value": {"x": value.x, "y": value.y}}
-		TYPE_VECTOR3:
-			return {"valueType": "Vector3", "value": {"x": value.x, "y": value.y, "z": value.z}}
-		TYPE_VECTOR3I:
-			return {"valueType": "Vector3i", "value": {"x": value.x, "y": value.y, "z": value.z}}
-		TYPE_VECTOR4:
-			return {"valueType": "Vector4", "value": {"x": value.x, "y": value.y, "z": value.z, "w": value.w}}
-		TYPE_VECTOR4I:
-			return {"valueType": "Vector4i", "value": {"x": value.x, "y": value.y, "z": value.z, "w": value.w}}
-		TYPE_RECT2:
-			return {"valueType": "Rect2", "value": _rect2(value)}
-		TYPE_RECT2I:
-			return {"valueType": "Rect2i", "value": {"x": value.position.x, "y": value.position.y, "w": value.size.x, "h": value.size.y}}
-		TYPE_COLOR:
-			return {"valueType": "Color", "value": {"r": value.r, "g": value.g, "b": value.b, "a": value.a}}
-		TYPE_TRANSFORM2D:
-			return {"valueType": "Transform2D", "value": {"x": _vec2(value.x), "y": _vec2(value.y), "origin": _vec2(value.origin)}}
-		TYPE_TRANSFORM3D:
-			return {"valueType": "Transform3D", "value": {"origin": {"x": value.origin.x, "y": value.origin.y, "z": value.origin.z}}}
-		TYPE_BASIS:
-			return {"valueType": "Basis", "value": {"x": {"x": value.x.x, "y": value.x.y, "z": value.x.z}, "y": {"x": value.y.x, "y": value.y.y, "z": value.y.z}, "z": {"x": value.z.x, "y": value.z.y, "z": value.z.z}}}
-		TYPE_QUATERNION:
-			return {"valueType": "Quaternion", "value": {"x": value.x, "y": value.y, "z": value.z, "w": value.w}}
-		TYPE_PLANE:
-			return {"valueType": "Plane", "value": {"x": value.normal.x, "y": value.normal.y, "z": value.normal.z, "d": value.d}}
-		TYPE_AABB:
-			return {"valueType": "AABB", "value": {"position": {"x": value.position.x, "y": value.position.y, "z": value.position.z}, "size": {"x": value.size.x, "y": value.size.y, "z": value.size.z}}}
-		TYPE_OBJECT:
-			return _encode_object(value)
-		TYPE_CALLABLE:
-			return {"valueType": "Callable", "value": {"text": str(value)}, "note": "Callable is not serializable; descriptor only"}
-		TYPE_SIGNAL:
-			return {"valueType": "Signal", "value": {"text": str(value)}, "note": "Signal is not serializable; descriptor only"}
-		TYPE_RID:
-			return {"valueType": "RID", "value": {"text": str(value)}, "note": "RID is session-local; not a stable identifier"}
-		TYPE_ARRAY:
-			return _encode_array(value, depth)
-		TYPE_DICTIONARY:
-			return _encode_dictionary(value, depth)
-	var vtype := typeof(value)
-	# Packed* 数组编号连续(4.6.3 实测 29..37),用区间判断比逐个 match 分支稳。
-	if vtype >= TYPE_PACKED_BYTE_ARRAY and vtype <= TYPE_PACKED_COLOR_ARRAY:
-		return _encode_packed(value, depth)
-	return {"valueType": type_string(vtype), "value": null, "note": "Unsupported value type; only the type name is reported"}
+	return ValueCodec.encode(value, depth)
 
-func _encode_object(value) -> Dictionary:
-	if not is_instance_valid(value):
-		return {"valueType": "Object", "value": {"invalid": true}, "note": "Object reference is no longer valid in this editor session"}
-	var info := {"className": value.get_class(), "instanceId": _id(value)}
-	if value is Node:
-		info["kind"] = "Node"
-		info["nodePath"] = str(value.get_path()) if value.is_inside_tree() else ""
-		info["sceneFilePath"] = value.scene_file_path
-	elif value is Resource:
-		info["kind"] = "Resource"
-		info["resourcePath"] = value.resource_path
-		info["resourceName"] = str(value.resource_name)
+# ---------------------------------------------------------------- 事件回灌 (Editor → MCP)
+
+## 事件源：选择 / 场景生命周期 / undo 历史 / 引擎日志 / 场景指纹轮询。
+## 全部落到 EventHub 的环形缓冲，并在有 peer 时按帧推送。
+func _install_event_bridge() -> void:
+	if _event_bridge_installed:
+		return
+	_event_bridge_installed = true
+	if log_capture == null:
+		log_capture = LogCapture.new()
+		log_capture.sink = Callable(self, "_on_engine_log")
+		log_capture.install()
+		_log("日志回灌: %s" % ("已订阅 OS.add_logger" if log_capture.is_installed() else "不可用"), "info")
+	var selection := EditorInterface.get_selection()
+	if selection != null and not selection.selection_changed.is_connected(_on_selection_changed):
+		selection.selection_changed.connect(_on_selection_changed)
+	var undo_redo := EditorInterface.get_editor_undo_redo()
+	if undo_redo != null and not undo_redo.history_changed.is_connected(_on_history_changed):
+		undo_redo.history_changed.connect(_on_history_changed)
+	if not scene_changed.is_connected(_on_scene_changed):
+		scene_changed.connect(_on_scene_changed)
+	if not scene_closed.is_connected(_on_scene_closed):
+		scene_closed.connect(_on_scene_closed)
+	if not scene_saved.is_connected(_on_scene_saved):
+		scene_saved.connect(_on_scene_saved)
+	_poll_scene(true)
+
+
+func _remove_event_bridge() -> void:
+	_event_bridge_installed = false
+	if log_capture != null:
+		log_capture.uninstall()
+		log_capture = null
+	var selection := EditorInterface.get_selection()
+	if selection != null and selection.selection_changed.is_connected(_on_selection_changed):
+		selection.selection_changed.disconnect(_on_selection_changed)
+	var undo_redo := EditorInterface.get_editor_undo_redo()
+	if undo_redo != null and undo_redo.history_changed.is_connected(_on_history_changed):
+		undo_redo.history_changed.disconnect(_on_history_changed)
+	if scene_changed.is_connected(_on_scene_changed):
+		scene_changed.disconnect(_on_scene_changed)
+	if scene_closed.is_connected(_on_scene_closed):
+		scene_closed.disconnect(_on_scene_closed)
+	if scene_saved.is_connected(_on_scene_saved):
+		scene_saved.disconnect(_on_scene_saved)
+
+
+# 实测信号签名(4.6.3 ClassDB): scene_changed(scene_root: Object)、
+# scene_closed(filepath: String)、scene_saved(filepath: String)、
+# selection_changed()、history_changed()。参数写成默认值兜住小版本差异。
+func _on_scene_changed(scene_root = null) -> void:
+	if not _event_bridge_installed:
+		return
+	_scene_fingerprint = 0
+	var root: Node = scene_root if scene_root != null and is_instance_valid(scene_root) else EditorInterface.get_edited_scene_root()
+	_emit_event("scene_changed", {
+		"rootName": str(root.name) if root != null else "",
+		"rootClass": root.get_class() if root != null else "",
+		"openScenes": EditorInterface.get_open_scenes(),
+		"history": EditorWriter.history_state(root),
+	})
+
+
+func _on_scene_closed(path := "") -> void:
+	if not _event_bridge_installed:
+		return
+	_scene_fingerprint = 0
+	_poll_scene(true)
+	_emit_event("scene_closed", {"closedPath": str(path), "openScenes": EditorInterface.get_open_scenes()})
+
+
+func _on_scene_saved(path := "") -> void:
+	if not _event_bridge_installed:
+		return
+	_emit_event("scene_saved", {
+		"savedPath": str(path),
+		"history": EditorWriter.history_state(EditorInterface.get_edited_scene_root()),
+	})
+
+
+func _on_selection_changed() -> void:
+	if not _event_bridge_installed or not Engine.is_editor_hint():
+		return
+	var root := EditorInterface.get_edited_scene_root()
+	var selection := SelectionCollector.collect_bridge(root)
+	_emit_event("selection_changed", {
+		"count": int(selection.get("count", 0)),
+		"nodes": selection.get("nodes", []),
+		"focus": _selection_focus(root),
+	})
+
+
+func _on_history_changed() -> void:
+	if not _event_bridge_installed:
+		return
+	# 历史变了，场景内容可能也变了：让下一次轮询强制重算并推一份树快照。
+	_scene_fingerprint = 0
+	_emit_event("history_changed", EditorWriter.history_state(EditorInterface.get_edited_scene_root()))
+
+
+func _on_engine_log(entry: Dictionary) -> void:
+	_emit_event("log", entry)
+
+
+func _emit_event(type: String, data: Dictionary) -> Dictionary:
+	if events == null:
+		events = EventHub.new()
+	if not data.has("scenePath"):
+		var root := EditorInterface.get_edited_scene_root()
+		data["scenePath"] = root.scene_file_path if root != null and is_instance_valid(root) else ""
+	return events.emit(type, data)
+
+
+func _flush_events() -> void:
+	var queue := events.take_queue()
+	if peer == null or queue.is_empty():
+		return
+	for event in queue:
+		_send_event(event)
+
+
+func _send_event(event: Dictionary) -> void:
+	if peer == null:
+		return
+	var body := JSON.stringify({
+		"protocolVersion": PROTOCOL_VERSION,
+		"sessionId": session_id,
+		"event": event,
+	}, "", false, true).to_utf8_buffer()
+	if body.size() > MAX_MESSAGE_BYTES:
+		# 单个事件过大就直接丢：事件是通知，权威数据仍可通过 editor_events/editor_* 取。
+		return
+	var frame := PackedByteArray()
+	frame.resize(4)
+	frame.encode_u32(0, body.size())
+	frame.append_array(body)
+	peer.put_data(frame)
+
+
+## 场景内容指纹：编辑器没有"场景内容改变"的公共信号，用轮询兜住
+## 不经过 undo 历史的改动（脚本驱动、外部重载等）。只在变化时推送树快照。
+func _poll_scene(force: bool) -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null or not is_instance_valid(root):
+		if _scene_fingerprint != 0:
+			_scene_fingerprint = 0
+			_emit_event("scene_tree_changed", {"reason": "no_edited_scene", "nodeCount": 0, "nodes": [], "truncated": false})
+		return
+	var fingerprint := _scene_fingerprint_of(root)
+	if not force and fingerprint == _scene_fingerprint:
+		return
+	_scene_fingerprint = fingerprint
+	var tree := NodeCollector.collect_tree(root, root, {
+		"maxNodes": MAX_PUSH_TREE_NODES,
+		"maxDepth": DEFAULT_MAX_DEPTH,
+		"includeGroups": false,
+	})
+	_emit_event("scene_tree_changed", {
+		"reason": "content_changed",
+		"rootName": str(root.name),
+		"rootClass": root.get_class(),
+		"nodeCount": int(tree["subtreeNodeCount"]),
+		"nodes": tree["nodes"],
+		"truncated": bool(tree["truncated"]),
+		"truncatedBy": tree["truncatedBy"],
+		"fingerprint": fingerprint,
+		"source": "EditorInterface.get_edited_scene_root (in-memory, includes unsaved edits)",
+	})
+
+
+func _scene_fingerprint_of(root: Node) -> int:
+	var parts := PackedStringArray()
+	var count := 0
+	var stack := [root]
+	while not stack.is_empty() and count < 2000:
+		var node: Node = stack.pop_back()
+		count += 1
+		var rel := "." if node == root else str(root.get_path_to(node))
+		parts.append("%s|%s|%d" % [rel, node.get_class(), node.get_child_count()])
+		for index in range(node.get_child_count() - 1, -1, -1):
+			stack.push_back(node.get_child(index))
+	return ("|".join(parts)).hash()
+
+
+# ---------------------------------------------------------------- 焦点 / Inspector 属性
+
+## 当前选中节点 + Inspector 属性值。selection_changed 事件与 editor_scene_info 共用。
+func _selection_focus(root: Node) -> Dictionary:
+	if root == null or not is_instance_valid(root) or not Engine.is_editor_hint():
+		return {}
+	var selection := EditorInterface.get_selection()
+	if selection == null:
+		return {}
+	var selected := selection.get_selected_nodes()
+	if selected.size() == 0:
+		return {}
+	var node = selected[selected.size() - 1]
+	if node == null or not is_instance_valid(node):
+		return {}
+	var props := _property_entries(node, "values", [], 48)
+	return {
+		"path": _rel_path(root, node),
+		"name": str(node.name),
+		"type": node.get_class(),
+		"objectId": _id(node),
+		"propertyCount": int(props["total"]),
+		"properties": props["entries"],
+		"truncated": bool(props["truncated"]),
+		"source": "EditorSelection.get_selected_nodes() + node.get_property_list() from the live editor scene",
+	}
+
+# ---------------------------------------------------------------- 写入方法 (UndoRedo)
+
+func _editor_events(params: Dictionary) -> Dictionary:
+	var since_seq := int(params.get("sinceSeq", 0))
+	var limit := clampi(int(params.get("limit", 100)), 1, 200)
+	var types := []
+	var raw_types = params.get("types", [])
+	if raw_types is Array:
+		for t in raw_types:
+			types.append(str(t))
+	var data := _identity()
+	var result := events.since(since_seq, limit, types)
+	for key in result.keys():
+		data[key] = result[key]
+	data["state"] = events.state()
+	data["logCapture"] = log_capture.state() if log_capture != null else {"installed": false}
+	data["note"] = "Events are authoritative in the editor ring buffer; frames are also pushed while a bridge peer is connected. Deduplicate by seq."
+	return data
+
+
+func _editor_set_node_property(params: Dictionary) -> Dictionary:
+	var guard := _require_edited_scene()
+	if guard.has("__error"):
+		return guard
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _write_context(root)
+	var node := _resolve_node(root, str(params.get("nodePath", "")).strip_edges())
+	if node == null:
+		data["objectId"] = null
+		return _fail("EDITOR_NODE_NOT_FOUND", "No node matches path '%s' inside the edited scene" % str(params.get("nodePath", "")), data)
+	data["objectId"] = _id(node)
+	var property := str(params.get("property", "")).strip_edges()
+	if property == "":
+		return _fail("EDITOR_PROPERTY_UNKNOWN", "property must be a non-empty string", data)
+	return _merge_result(data, EditorWriter.set_property(root, node, property, params.get("value")))
+
+
+func _editor_add_node(params: Dictionary) -> Dictionary:
+	var guard := _require_edited_scene()
+	if guard.has("__error"):
+		return guard
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _write_context(root)
+	var parent := _resolve_node(root, str(params.get("parentPath", "")).strip_edges())
+	if parent == null:
+		return _fail("EDITOR_NODE_NOT_FOUND", "No parent node matches path '%s' inside the edited scene" % str(params.get("parentPath", "")), data)
+	var type_name := str(params.get("type", "")).strip_edges()
+	if type_name == "":
+		return _fail("EDITOR_NODE_TYPE_UNKNOWN", "type is required (a ClassDB class name, e.g. 'Sprite2D')", data)
+	var properties = params.get("properties", {})
+	if not properties is Dictionary:
+		properties = {}
+	var result := EditorWriter.add_node(root, parent, type_name, str(params.get("name", "")), properties)
+	if not result.has("__error"):
+		var created := root.get_node_or_null(NodePath(str(result.get("nodePath", ""))))
+		data["objectId"] = _id_or_null(created)
+	return _merge_result(data, result)
+
+
+func _editor_remove_node(params: Dictionary) -> Dictionary:
+	var guard := _require_edited_scene()
+	if guard.has("__error"):
+		return guard
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _write_context(root)
+	var node := _resolve_node(root, str(params.get("nodePath", "")).strip_edges())
+	if node == null:
+		data["objectId"] = null
+		return _fail("EDITOR_NODE_NOT_FOUND", "No node matches path '%s' inside the edited scene" % str(params.get("nodePath", "")), data)
+	data["objectId"] = _id(node)
+	return _merge_result(data, EditorWriter.remove_node(root, node))
+
+
+func _editor_select_node(params: Dictionary) -> Dictionary:
+	var guard := _require_edited_scene()
+	if guard.has("__error"):
+		return guard
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _write_context(root)
+	var nodes := []
+	var missing := []
+	var raw_paths = params.get("nodePaths", [])
+	if raw_paths is Array and raw_paths.size() > 0:
+		for p in raw_paths:
+			var node := _resolve_node(root, str(p))
+			if node == null:
+				missing.append(str(p))
+			else:
+				nodes.append(node)
 	else:
-		info["kind"] = "Object"
-	# 不做深序列化:只给引用描述(按任务要求不为所有 Object 递归序列化)。
-	return {"valueType": "Object", "value": info, "note": "Object/Resource reference descriptor only (no deep serialization)"}
+		var single := str(params.get("nodePath", "")).strip_edges()
+		var node := _resolve_node(root, single)
+		if node == null:
+			missing.append(single)
+		else:
+			nodes.append(node)
+	if nodes.is_empty() and not missing.is_empty():
+		return _fail("EDITOR_NODE_NOT_FOUND", "No node matches the requested path(s)", data)
+	var result := EditorWriter.select_nodes(root, nodes)
+	if not result.has("__error"):
+		result["missing"] = missing
+	if nodes.size() > 0:
+		data["objectId"] = _id(nodes[nodes.size() - 1])
+	return _merge_result(data, result)
 
-func _encode_array(value: Array, depth: int) -> Dictionary:
-	if depth >= MAX_NESTING_DEPTH:
-		return {"valueType": "Array", "value": null, "note": "Nesting depth limit reached; contents omitted"}
-	var out := []
-	var limit := mini(value.size(), MAX_ARRAY_ITEMS)
-	for i in limit:
-		var item := _encode_value(value[i], depth + 1)
-		out.append(item["value"])
-	return {"valueType": "Array", "value": out, "truncated": value.size() > limit, "length": value.size()}
 
-func _encode_dictionary(value: Dictionary, depth: int) -> Dictionary:
-	if depth >= MAX_NESTING_DEPTH:
-		return {"valueType": "Dictionary", "value": null, "note": "Nesting depth limit reached; contents omitted"}
-	var out := {}
-	var limit := mini(value.size(), MAX_ARRAY_ITEMS)
-	var i := 0
-	for k in value.keys():
-		if i >= limit:
-			break
-		var item := _encode_value(value[k], depth + 1)
-		out[str(k)] = item["value"]
-		i += 1
-	return {"valueType": "Dictionary", "value": out, "truncated": value.size() > limit, "length": value.size(), "note": "Dictionary keys are stringified"}
+func _editor_history_step(params: Dictionary, backwards: bool) -> Dictionary:
+	var guard := _require_edited_scene()
+	if guard.has("__error"):
+		return guard
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _write_context(root)
+	var steps := int(params.get("steps", 1))
+	var result := EditorWriter.undo(root, steps) if backwards else EditorWriter.redo(root, steps)
+	return _merge_result(data, result)
 
-func _encode_packed(value, depth: int) -> Dictionary:
-	var limit := mini(value.size(), MAX_ARRAY_ITEMS)
-	var out := []
-	for i in limit:
-		var item := _encode_value(value[i], depth + 1)
-		out.append(item["value"])
-	return {"valueType": type_string(typeof(value)), "value": out, "truncated": value.size() > limit, "length": value.size()}
 
-func _clip_string(text: String) -> String:
-	if text.length() <= MAX_STRING_CHARS:
-		return text
-	return text.substr(0, MAX_STRING_CHARS) + "…(truncated)"
+## 写入类方法共用：场景存在性守卫。
+func _require_edited_scene() -> Dictionary:
+	var root := EditorInterface.get_edited_scene_root()
+	var data := _identity()
+	data["isDirty"] = null
+	data["isDirtyReason"] = DIRTY_REASON
+	if root == null:
+		data["isValid"] = false
+		data["hasEditedScene"] = false
+		data["scenePath"] = ""
+		if EditorInterface.get_open_scenes().is_empty():
+			return _fail("EDITOR_NO_SCENE_OPEN", "No scene is open in the Godot editor", data)
+		return _fail("EDITOR_SCENE_ROOT_MISSING", "The editor reports open scene(s) but provides no edited scene root", data)
+	if not is_instance_valid(root):
+		data["isValid"] = false
+		data["hasEditedScene"] = true
+		data["scenePath"] = ""
+		return _fail("EDITOR_OBJECT_INVALID", "The edited scene root object is no longer valid", data)
+	return {}
+
+
+## 写入类方法共用的结果信封：成功时合并，失败时把上下文塞进 error.details。
+func _write_context(root: Node) -> Dictionary:
+	var data := _identity()
+	data["isDirty"] = null
+	data["isDirtyReason"] = DIRTY_REASON
+	data["isValid"] = root != null and is_instance_valid(root)
+	data["hasEditedScene"] = root != null
+	data["scenePath"] = root.scene_file_path if root != null and is_instance_valid(root) else ""
+	return data
+
+
+func _merge_result(base: Dictionary, result: Dictionary) -> Dictionary:
+	if result.has("__error"):
+		var err: Dictionary = result["__error"]
+		var details: Dictionary = err.get("details", {})
+		for key in base.keys():
+			if not details.has(key):
+				details[key] = base[key]
+		err["details"] = details
+		return {"__error": err}
+	var out := base.duplicate()
+	for key in result.keys():
+		out[key] = result[key]
+	return out
+
+

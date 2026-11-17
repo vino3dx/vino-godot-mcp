@@ -6,7 +6,7 @@
 //   3) 真实 MCP server 子进程:tools/list 与注册结果一致(证明筛选发生在注册之前)
 //
 // 断言不写死工具清单:期望值一律由 allTools + TOOL_PRESET_DEPENDENCIES 现算,
-// 只把"当前基线数量"(40/57/45/62)作为审计锚点。
+// 只把"当前基线数量"(40/57/52/69)作为审计锚点。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -49,8 +49,8 @@ function catchError(run: () => unknown): GodotMcpError {
 
 // ---------------------------------------------------------------- 预设本身
 
-test("four presets expose exactly their declared dependencies (baseline 40 / 57 / 45 / 62)", () => {
-  const baseline: Record<string, number> = { default: 40, runtime: 57, editor: 45, full: 62 };
+test("four presets expose exactly their declared dependencies (baseline 40 / 57 / 52 / 69)", () => {
+  const baseline: Record<string, number> = { default: 40, runtime: 57, editor: 52, full: 69 };
   for (const [preset, count] of Object.entries(baseline)) {
     const sel = selection({ [PRESET_ENV]: preset });
     assert.equal(sel.preset, preset);
@@ -134,14 +134,14 @@ test("preset and group intersect: a group narrows the preset and never widens it
   // 同一组 group 在 editor 预设下结果完全不同
   const editor = selection({ [PRESET_ENV]: "editor", [GROUPS_ENV]: "scene,editor" });
   assert.deepEqual(namesOf(editor.tools), expectedFor(TOOL_PRESET_DEPENDENCIES.editor, ["scene", "editor"]));
-  assert.equal(editor.tools.length, 20, "16 scene none + 4 editor bridge");
+  assert.equal(editor.tools.length, 27, "16 scene none + 11 editor bridge");
 });
 
 test("legacy VINO_GODOT_MCP_GROUPS alone keeps the pre-P1-C tool set", () => {
   // 旧版本 = 只按领域过滤、不做 dependency 过滤。修复后必须逐领域完全一致。
   const legacyCounts: Array<[string, number]> = [
     ["project,shader", 11], ["project", 9], ["scene", 17], ["runtime", 12], ["class", 3],
-    ["editor", 4], ["resource", 4], ["script", 7], ["shader", 2], ["asset", 2], ["utility", 2],
+    ["editor", 11], ["resource", 4], ["script", 7], ["shader", 2], ["asset", 2], ["utility", 2],
   ];
   for (const [raw, count] of legacyCounts) {
     const sel = selection({ [GROUPS_ENV]: raw });
@@ -157,7 +157,7 @@ test("legacy VINO_GODOT_MCP_GROUPS alone keeps the pre-P1-C tool set", () => {
   }
   // 显式 full + 空 groups 仍等于全部
   for (const raw of [undefined, "", "  ", " , "]) {
-    assert.equal(selection({ [PRESET_ENV]: "full", [GROUPS_ENV]: raw }).tools.length, 62);
+    assert.equal(selection({ [PRESET_ENV]: "full", [GROUPS_ENV]: raw }).tools.length, 69);
   }
 });
 
@@ -191,7 +191,7 @@ test("an empty intersection fails with TOOL_SELECTION_EMPTY plus an actionable f
 
 test("tools with a missing or illegal dependency are rejected before filtering", () => {
   // 正常输入不走异常路径
-  assert.equal(selection({ [PRESET_ENV]: "full" }).tools.length, 62);
+  assert.equal(selection({ [PRESET_ENV]: "full" }).tools.length, 69);
 
   const illegal = { ...allTools[0]!, name: "utility_broken", dependency: "network" as unknown as ToolDependency };
   const badError = catchError(() => resolveToolSelection([...allTools, illegal], { [PRESET_ENV]: "full" }));
@@ -286,7 +286,7 @@ test("real MCP server advertises only the selected tools (preset ∩ group)", as
   for (let waited = 0; waited < 2000 && !logs().includes("tool selection:"); waited += 25) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.match(logs(), /tool selection: preset=runtime source=env dependencies=none\+godot groups=scene,script,utility tools=26\/62/);
+  assert.match(logs(), /tool selection: preset=runtime source=env dependencies=none\+godot groups=scene,script,utility tools=26\/69/);
 });
 
 test("real MCP server without configuration exposes the default preset only", async (t) => {
@@ -315,5 +315,5 @@ test("real MCP server with a legacy GROUPS-only config exposes the pre-P1-C set"
   for (let waited = 0; waited < 2000 && !logs().includes("tool selection:"); waited += 25) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.match(logs(), /tool selection: preset=full source=legacy-groups dependencies=none\+godot\+bridge groups=project,shader tools=11\/62/);
+  assert.match(logs(), /tool selection: preset=full source=legacy-groups dependencies=none\+godot\+bridge groups=project,shader tools=11\/69/);
 });
