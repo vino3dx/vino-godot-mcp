@@ -113,7 +113,7 @@ test("engine-executing and file-writing tools are advertised as not read-only", 
     // 写工程文件
     "scene_add_node", "scene_remove_node", "scene_update_node_property", "scene_reparent_node",
     "resource_update_property", "resource_add_or_update_external",
-    "project_set_config", "project_input_update", "project_apply_changes",
+    "project_set_config", "project_input_update", "project_apply_changes", "project_init",
     "script_create", "script_update_function", "script_update_export_default",
   ] as const;
   for (const name of mustBeWritable) assert.equal(byName(name).annotations.readOnly, false, `${name} must not claim readOnly`);
@@ -206,11 +206,11 @@ test("P1-B: dependency is only none / godot / bridge", () => {
   assert.deepEqual(illegalSource.map((b) => `${b.name} (${b.file})`), []);
 });
 
-test("P1-B: dependency classification matches the audited baseline (39 none / 17 godot / 5 bridge)", () => {
+test("P1-B: dependency classification matches the audited baseline (40 none / 17 godot / 5 bridge)", () => {
   const counts: Record<string, number> = {};
   for (const tool of allTools) counts[tool.dependency] = (counts[tool.dependency] ?? 0) + 1;
-  assert.deepEqual(counts, { none: 39, godot: 17, bridge: 5 }, `actual classification: ${JSON.stringify(counts)}`);
-  assert.equal(allTools.length, 61, "the audited baseline covers exactly 61 tools");
+  assert.deepEqual(counts, { none: 40, godot: 17, bridge: 5 }, `actual classification: ${JSON.stringify(counts)}`);
+  assert.equal(allTools.length, 62, "the audited baseline covers exactly 62 tools");
 });
 
 test("P1-B: every tool matches its domain default or an explicit exception", () => {

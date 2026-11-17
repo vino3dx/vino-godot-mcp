@@ -130,7 +130,7 @@ vino-godot-mcp --help                  # usage, plus the stdio note below
 Without arguments the process starts a **stdio MCP server** and logs
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 61 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 62 tools exposed
 ```
 
 to stderr, then waits for JSON-RPC on stdin (Ctrl+C to quit). One log line and then nothing visible is the expected behaviour, not a hang — only an MCP client speaks to it. Logs always go to stderr; stdout is reserved for the protocol. The count above is the `full` preset (everything in `src/tools/index.ts`); narrower presets and `VINO_GODOT_MCP_GROUPS` expose fewer tools. You normally never run it by hand — your AI client launches it after the configuration below.
@@ -224,6 +224,7 @@ Once configured, just talk to your AI in natural language:
 | What you say | Tool the AI calls |
 |---|---|
 | “Which Godot version does the CLI report?” | `runtime_get_version` |
+| “This folder has no project yet — scaffold a Godot 4 project with a main scene.” | `project_init` |
 | “Read `res://project.godot` and show the main scene and renderer settings.” | `project_get_config` |
 | “Print the node tree of `res://main.tscn`.” | `scene_get_tree` |
 | “In `res://player.tscn`, set `Sprite2D.position` to `Vector2(32, 64)`.” | `scene_update_node_property` |
@@ -289,11 +290,13 @@ The single source of truth is `allTools` in `src/tools/index.ts`; the startup lo
 
 Runtime and editor tools are **not exposed by the default preset**: they require `VINO_GODOT_MCP_PRESET=runtime` or `editor` (or `full`). The same applies to every other `dependency: "godot"` tool (`class_*`, `scene_get_node_info`, `project_validate`) and `dependency: "bridge"` tool (`editor_*`, `project_capabilities`). Tool descriptions that point at `runtime_inspect_ui` say so explicitly.
 
+**Cold start**: in a directory without `project.godot` every project/scene/script tool refuses to work with `PROJECT_NOT_FOUND`. Call `project_init` first — it is the only tool that bootstraps a Godot 4 project from nothing (`project.godot`, `scenes/ scripts/ assets/`, a minimal main scene and a `.gitignore`), and it never overwrites an existing project unless `overwrite=true`.
+
 | Domain | Tools |
 |--------|-------|
 | Utility | `utility_ping`, `utility_task_status` |
 | Runtime | `runtime_get_version`, `runtime_run_project`, `runtime_run_scene`, `runtime_export_project`, `runtime_capture_screenshot`, `runtime_inspect_ui`, `runtime_check_addon_status`, `runtime_visual_debug`, `runtime_start_session`, `runtime_get_session`, `runtime_read_session_logs`, `runtime_stop_session` |
-| Project | `project_capabilities`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_check_changes`, `project_input_get`, `project_input_update` |
+| Project | `project_capabilities`, `project_init`, `project_get_config`, `project_set_config`, `project_validate`, `project_apply_changes`, `project_check_changes`, `project_input_get`, `project_input_update` |
 | Editor (read-only) | `editor_get_scene`, `editor_get_tree`, `editor_get_node`, `editor_get_layout` — require the Editor addon plus a running Godot Editor |
 | Scene | `scene_get_tree`, `scene_get_node_info`, `scene_find_nodes`, `scene_add_visual_node`, `scene_set_ui_layout`, `scene_get_connections`, `scene_analyze_connections`, `scene_update_signal_connection`, `scene_update_node_property`, `scene_remove_node`, `scene_add_node`, `scene_reparent_node`, `scene_add_to_group`, `scene_remove_from_group`, `scene_instantiate_scene`, `scene_connect_signal`, `scene_disconnect_signal` |
 | Resource | `resource_get_info`, `resource_update_property`, `resource_add_or_update_external`, `resource_check_uid` |
@@ -302,7 +305,7 @@ Runtime and editor tools are **not exposed by the default preset**: they require
 | Class | `class_get_info`, `class_search`, `class_validate_member` |
 | Asset | `asset_list`, `asset_get_info` |
 
-> Tools that need authoritative class info (`class_get_info`, `class_search`, `class_validate_member`, `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.vino-godot-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits your `.gitignore`. Because the first call starts `godot --headless --dump-extension-api` and writes that cache, these tools are advertised with `readOnlyHint: false` even though they never modify project content. The same applies to `project_validate` and `runtime_visual_debug`, which execute project code.
+> Tools that need authoritative class info (`class_get_info`, `class_search`, `class_validate_member`, `scene_get_node_info`) cache the engine's ClassDB API dump under `<projectRoot>/.vino-godot-mcp/` (keyed by engine version) — add that folder to your project's `.gitignore`; the server never edits an existing `.gitignore` (`project_init` only creates one when the file is absent). Because the first call starts `godot --headless --dump-extension-api` and writes that cache, these tools are advertised with `readOnlyHint: false` even though they never modify project content. The same applies to `project_validate` and `runtime_visual_debug`, which execute project code.
 
 ### Architecture & Documentation
 
@@ -431,7 +434,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 不带参数时启动的是 **stdio MCP 服务**，它先往 stderr 打
 
 ```text
-[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 61 tools exposed
+[vino-godot-mcp] INFO MCP server "vino-godot-mcp@1.2.2" listening on stdio, 62 tools exposed
 ```
 
 然后阻塞等待 stdin 上的 JSON-RPC 消息（Ctrl+C 退出）。只打一行日志然后没反应是**正常行为**，不是卡死 —— 只有 MCP 客户端才会和它对话。日志一律走 stderr，stdout 专供协议使用。上面这个数量对应 `full` 预设（`src/tools/index.ts` 的全部工具）；更窄的预设与 `VINO_GODOT_MCP_GROUPS` 会暴露更少的工具。通常你不需要手动运行它 —— AI 客户端在完成下面的配置后会自己拉起。
@@ -525,6 +528,7 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 | 你可以这样说 | AI 实际调用的工具 |
 |---|---|
 | “CLI 报告的 Godot 版本是多少？” | `runtime_get_version` |
+| “这个目录还没有工程，帮我建一个带主场景的 Godot 4 工程。” | `project_init` |
 | “读取 `res://project.godot`，告诉我主场景和渲染设置。” | `project_get_config` |
 | “打印 `res://main.tscn` 的节点树。” | `scene_get_tree` |
 | “把 `res://player.tscn` 里 `Sprite2D.position` 改成 `Vector2(32, 64)`。” | `scene_update_node_property` |
@@ -590,11 +594,13 @@ node dist/src/dev-cli.js call utility_ping '{"echo":"heartbeat"}'
 
 Runtime 与 editor 工具**不在默认预设中**：需要设置 `VINO_GODOT_MCP_PRESET=runtime` 或 `editor`（或 `full`）。所有 `dependency: "godot"` 的工具（`class_*`、`scene_get_node_info`、`project_validate`）与 `dependency: "bridge"` 的工具（`editor_*`、`project_capabilities`）同理。指向 `runtime_inspect_ui` 的工具描述会明确标注这一点。
 
+**冷启动**：在没有 `project.godot` 的目录里，所有 project/scene/script 工具都会以 `PROJECT_NOT_FOUND` 拒绝工作。此时先调用 `project_init` —— 它是唯一能从零自举 Godot 4 工程的工具（`project.godot`、`scenes/ scripts/ assets/`、最小主场景与 `.gitignore`）；除非显式传 `overwrite=true`，它绝不覆盖已有工程。
+
 | 领域 | 工具 |
 |------|------|
 | Utility | `utility_ping`、`utility_task_status` |
 | Runtime | `runtime_get_version`、`runtime_run_project`、`runtime_run_scene`、`runtime_export_project`、`runtime_capture_screenshot`、`runtime_inspect_ui`、`runtime_check_addon_status`、`runtime_visual_debug`、`runtime_start_session`、`runtime_get_session`、`runtime_read_session_logs`、`runtime_stop_session` |
-| Project | `project_capabilities`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_check_changes`、`project_input_get`、`project_input_update` |
+| Project | `project_capabilities`、`project_init`、`project_get_config`、`project_set_config`、`project_validate`、`project_apply_changes`、`project_check_changes`、`project_input_get`、`project_input_update` |
 | Editor（只读） | `editor_get_scene`、`editor_get_tree`、`editor_get_node`、`editor_get_layout` —— 需要启用编辑器插件并保持 Godot 编辑器运行 |
 | Scene | `scene_get_tree`、`scene_get_node_info`、`scene_find_nodes`、`scene_add_visual_node`、`scene_set_ui_layout`、`scene_get_connections`、`scene_analyze_connections`、`scene_update_signal_connection`、`scene_update_node_property`、`scene_remove_node`、`scene_add_node`、`scene_reparent_node`、`scene_add_to_group`、`scene_remove_from_group`、`scene_instantiate_scene`、`scene_connect_signal`、`scene_disconnect_signal` |
 | Resource | `resource_get_info`、`resource_update_property`、`resource_add_or_update_external`、`resource_check_uid` |
@@ -603,7 +609,7 @@ Runtime 与 editor 工具**不在默认预设中**：需要设置 `VINO_GODOT_MC
 | Class | `class_get_info`、`class_search`、`class_validate_member` |
 | Asset | `asset_list`、`asset_get_info` |
 
-> 需要权威类信息的工具（`class_get_info`、`class_search`、`class_validate_member`、`scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.vino-godot-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`。由于首次调用会启动 `godot --headless --dump-extension-api` 并写入该缓存，这些工具的注解是 `readOnlyHint: false`，尽管它们不修改工程内容。`project_validate` 与 `runtime_visual_debug` 同理，因为它们会执行工程代码。
+> 需要权威类信息的工具（`class_get_info`、`class_search`、`class_validate_member`、`scene_get_node_info`）会把引擎导出的 ClassDB API dump 缓存到 `<被操作工程根>/.vino-godot-mcp/`（按引擎版本分键）—— 建议把该目录加进你工程的 `.gitignore`；本服务不会自动修改你的 `.gitignore`（`project_init` 只在文件不存在时新建一份）。由于首次调用会启动 `godot --headless --dump-extension-api` 并写入该缓存，这些工具的注解是 `readOnlyHint: false`，尽管它们不修改工程内容。`project_validate` 与 `runtime_visual_debug` 同理，因为它们会执行工程代码。
 
 ### 项目架构与文档
 

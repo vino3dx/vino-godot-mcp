@@ -5,6 +5,7 @@ import type { Logger } from "../types/index.js";
 import { FileService } from "./fileService.js";
 import { GodotApiService } from "./godotApiService.js";
 import { GodotCliService } from "./godotCli.js";
+import { ProjectInitService } from "./projectInitService.js";
 import { ProjectService } from "./projectService.js";
 import { ResourceService } from "./resourceService.js";
 import { SceneService } from "./sceneService.js";
@@ -43,6 +44,8 @@ export interface AppContext {
   resource: ResourceService;
   /** project.godot 配置读取与无损修改。 */
   projectConfig: ProjectService;
+  /** 从零初始化 Godot 项目(唯一不依赖已有 project.godot 的写入口)。 */
+  projectInit: ProjectInitService;
   /** .gdshader 读取与安全更新。 */
   shader: ShaderService;
   /** .gd 脚本读取与安全更新。 */
@@ -82,6 +85,7 @@ export function createAppContext(logger: Logger, project: ProjectResolver = new 
     scene,
     resource: new ResourceService(),
     projectConfig: new ProjectService(),
+    projectInit: new ProjectInitService(),
     shader: new ShaderService(),
     script,
     runtime: new RuntimeService({ godot, project, runQueue }),

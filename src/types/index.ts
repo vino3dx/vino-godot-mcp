@@ -6,6 +6,8 @@ export type ErrorCode =
   | "LOCK_TIMEOUT" | "TASK_TIMEOUT" | "RUNTIME_REQUIRED" | "RUNTIME_FAILED" | "INTERNAL"
   | "PROJECT_NOT_FOUND" | "RESOURCE_NOT_FOUND" | "GODOT_NOT_FOUND" | "GODOT_PROCESS_FAILED"
   | "VALIDATION_FAILED" | "FILE_CHANGED" | "PROTECTED_PATH"
+  // project_init:目标位置已有 project.godot 且 overwrite=false(防覆盖,绝静默重建)。
+  | "ALREADY_EXISTS"
   // Editor Bridge 通道(editor 上下文):传输层失败与 Editor 侧语义失败分开报,不再统一成"连接关闭"。
   | "BRIDGE_UNAVAILABLE" | "BRIDGE_DISCONNECTED" | "BRIDGE_TIMEOUT" | "BRIDGE_PROTOCOL_ERROR"
   | "EDITOR_INSTANCE_MISMATCH"
