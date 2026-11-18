@@ -7,7 +7,7 @@
 //   - 注解字段为 readOnlyHint / destructiveHint / idempotentHint / openWorldHint。
 //   - `serveStdio(factory)` 负责 era 判定:既能服务 2026-07-28 客户端,也兼容 2025 老客户端(默认 legacy:'serve'),
 //     比手工 `new StdioServerTransport()` + `server.connect()` 兼容性更好,且由它托管 transport 生命周期。
-import { McpServer, type StandardSchemaWithJSON } from "@modelcontextprotocol/server";
+import { McpServer, type ServerContext, type StandardSchemaWithJSON } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { JsonSchema, Logger } from "../../types/index.js";
 import { toMcpContent, type ToolHost } from "./toolHost.js";
@@ -41,7 +41,9 @@ export async function startSdkServer<Ctx>(host: ToolHost<Ctx>, info: ServerInfo,
               idempotentHint: t.annotations.idempotent ?? false,
             },
           },
-          async (args: ToolArgs) => toMcpContent(await host.callTool(t.name, args)),
+          // T07:把 MCP 请求的取消信号(CallTool 的 notifications/cancelled)一路带到 handler。
+          // 只有声明了第三个参数的执行链路会用,其余工具忽略它,签名不变。
+          async (args: ToolArgs, ctx: ServerContext) => toMcpContent(await host.callTool(t.name, args, { signal: ctx.mcpReq.signal })),
         );
       }
       return server;

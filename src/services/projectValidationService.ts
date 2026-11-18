@@ -7,6 +7,7 @@ import { defaultRunRunner, type GodotRunRunner, type RunProcessResult } from "..
 import type { GodotCliService } from "./godotCli.js";
 import type { GodotSource } from "../godot/cli.js";
 import { TaskQueue } from "../core/concurrency/taskQueue.js";
+import { throwIfAborted } from "../core/concurrency/cancellation.js";
 
 export interface ValidationIssue {
   type: "SCRIPT_PARSE_ERROR" | "MISSING_RESOURCE" | "RESOURCE_PARSE_ERROR" | "SCENE_LOAD_ERROR" | "RUNTIME_ERROR" | "GODOT_NOT_FOUND" | "TASK_TIMEOUT";
@@ -28,12 +29,13 @@ export interface ProjectValidationResult {
   runtime?: { exitCode: number | null; stdout: string; stderr: string; durationMs: number; command: string };
 }
 
-interface Options { projectPath?: string; scene?: string; timeoutMs?: number; waitTimeoutMs?: number; tool: string }
+interface Options { projectPath?: string; scene?: string; timeoutMs?: number; waitTimeoutMs?: number; tool: string; /** T07:请求级取消信号 */ signal?: AbortSignal }
 
 export class ProjectValidationService {
   constructor(private readonly opts: { godot: GodotCliService; project: ProjectResolver; runQueue: TaskQueue; runner?: GodotRunRunner }) {}
 
   async validate(o: Options): Promise<ProjectValidationResult> {
+    throwIfAborted(o.signal, o.tool, "queue");
     const root = this.opts.project.resolve(o.projectPath);
     const files = collectFiles(root);
     const issues: ValidationIssue[] = [];
@@ -50,6 +52,8 @@ export class ProjectValidationService {
 
     if (executable && source) {
       for (const file of scripts) {
+        // 脚本之间是干净的中断点:一次 --check-only 不写任何项目文件。
+        throwIfAborted(o.signal, o.tool, "running");
         const result = await this.run(executable, ["--path", root, "--headless", "--check-only", "--script", toRes(root, file)], root, o);
         if (result.timedOut) { syntaxValidated = false; issues.push({ type: "TASK_TIMEOUT", message: `Script validation timed out: ${toRes(root, file)}`, file: toRes(root, file), details: logs(result) }); continue; }
         if (result.exitCode !== 0) { syntaxValidated = false; issues.push({ type: "SCRIPT_PARSE_ERROR", message: result.stderr || result.stdout || `Godot rejected ${toRes(root, file)}`, file: toRes(root, file), line: extractLine(result.stderr || result.stdout), details: logs(result) }); }
@@ -57,6 +61,7 @@ export class ProjectValidationService {
     }
 
     let resourceValidated = true;
+    throwIfAborted(o.signal, o.tool, "running");
     for (const file of resources) {
       let text: string;
       try { text = fs.readFileSync(file, "utf8"); }
@@ -86,7 +91,10 @@ export class ProjectValidationService {
 
   private run(file: string, args: string[], root: string, o: Options): Promise<RunProcessResult> {
     const runner = this.opts.runner ?? defaultRunRunner;
-    return this.opts.runQueue.runExclusive(root, { tool: o.tool, target: o.scene ?? root }, (signal) => runner(file, args, { timeoutMs: o.timeoutMs ?? 30_000, signal, cwd: root }), { ...(o.waitTimeoutMs === undefined ? {} : { waitTimeoutMs: o.waitTimeoutMs }) });
+    return this.opts.runQueue.runExclusive(root, { tool: o.tool, target: o.scene ?? root }, (taskSignal) => runner(file, args, { timeoutMs: o.timeoutMs ?? 30_000, signal: taskSignal, cwd: root }), {
+      ...(o.waitTimeoutMs === undefined ? {} : { waitTimeoutMs: o.waitTimeoutMs }),
+      ...(o.signal === undefined ? {} : { signal: o.signal }),
+    });
   }
 }
 

@@ -7,7 +7,7 @@ export const runtimeRunScene: ToolDefinition<AppContext> = {
   description:
     "Launch the Godot CLI to run a specific scene of the project and return its separated stdout/stderr and exit code. " +
     "Headless and --quit are on by default (smoke test). The process is killed if it does not exit within timeoutMs. " +
-    "Fails with GODOT_NOT_FOUND / GODOT_PROCESS_FAILED / TASK_TIMEOUT.",
+    "Fails with GODOT_NOT_FOUND / GODOT_PROCESS_FAILED / TASK_TIMEOUT. Cancelling the request (MCP notifications/cancelled) kills the Godot process and returns TASK_CANCELLED (category=cancelled, retryable=false); the project run slot stays locked until that process is confirmed dead.",
   inputSchema: {
     type: "object",
     required: ["scene"],
@@ -24,7 +24,7 @@ export const runtimeRunScene: ToolDefinition<AppContext> = {
   annotations: { readOnly: false, idempotent: false },
   runtimeRequired: true,
   dependency: "godot",
-  async handler(args, ctx) {
+  async handler(args, ctx, exec) {
     return {
       data: await ctx.runtime.runProject({
         projectPath: args["projectPath"] as string | undefined,
@@ -35,6 +35,7 @@ export const runtimeRunScene: ToolDefinition<AppContext> = {
         waitTimeoutMs: args["waitTimeoutMs"] as number | undefined,
         extraArgs: args["args"] as string[] | undefined,
         tool: "runtime_run_scene",
+        ...(exec?.signal ? { signal: exec.signal } : {}),
       }),
     };
   },

@@ -5,9 +5,9 @@ import type { AppContext } from "../../services/context.js";
 // 并把 ~6.5MB 的 extension_api.json 写进 <projectRoot>/.vino-godot-mcp/extension-api/。
 // 它们不修改用户的工程内容,但确实启动外部进程并写文件系统,所以 readOnly=false。
 export const classGetInfo: ToolDefinition<AppContext> = {
-  name: "class_get_info", domain: "class", description: "Query engine ClassDB metadata for a Godot class. This is API metadata from an engine dump, not a live Editor object. May start `godot --dump-extension-api` once per engine version and cache the dump under the project, so it is not read-only.",
+  name: "class_get_info", domain: "class", description: "Query engine ClassDB metadata for a Godot class. This is API metadata from an engine dump, not a live Editor object. May start `godot --dump-extension-api` once per engine version and cache the dump under the project, so it is not read-only. Cancelling the request (MCP notifications/cancelled) kills the Godot process and returns TASK_CANCELLED (category=cancelled, retryable=false); the project run slot stays locked until that process is confirmed dead.",
   inputSchema: { type: "object", required: ["className"], properties: { className: { type: "string", minLength: 1 }, projectPath: { type: "string", minLength: 1 } } }, annotations: { readOnly: false, idempotent: true }, runtimeRequired: true, dependency: "godot",
-  async handler(args, ctx) { return { data: await ctx.godotApi.getClassInfo(args.projectPath as string | undefined, args.className as string) }; },
+  async handler(args, ctx, exec) { return { data: await ctx.godotApi.getClassInfo(args.projectPath as string | undefined, args.className as string, exec?.signal) }; },
 };
 
 export const classSearch: ToolDefinition<AppContext> = {

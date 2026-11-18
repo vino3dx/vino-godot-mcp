@@ -9,7 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { GodotMcpError } from "../core/errors.js";
 import { TaskQueue } from "../core/concurrency/taskQueue.js";
+import { TaskCancelledError, attachCleanup, isCancellation } from "../core/concurrency/cancellation.js";
 import { ProjectResolver } from "../core/project/projectResolver.js";
+import { commitExportStaging, createExportStaging, discardExportStaging } from "./exportStaging.js";
 import type { GodotSource } from "../godot/cli.js";
 import {
   buildExportArgs,
@@ -85,6 +87,8 @@ export interface RunProjectOptions {
   extraArgs?: readonly string[];
   /** 锁持有者标识(工具名),写进 utility_task_status 的持有者。 */
   tool: string;
+  /** T07:请求级取消信号(MCP notifications/cancelled)。 */
+  signal?: AbortSignal;
 }
 
 export interface ExportProjectOptions {
@@ -98,6 +102,8 @@ export interface ExportProjectOptions {
   waitTimeoutMs?: number;
   extraArgs?: readonly string[];
   tool: string;
+  /** T07:请求级取消信号。 */
+  signal?: AbortSignal;
 }
 
 export interface CaptureScreenshotOptions {
@@ -114,6 +120,8 @@ export interface CaptureScreenshotOptions {
   /** 是否把 PNG 内联为 base64(文件 ≤1MB 时)。 */
   includeImage?: boolean;
   tool: string;
+  /** T07:请求级取消信号。 */
+  signal?: AbortSignal;
 }
 
 export interface CaptureScreenshotResult {
@@ -152,6 +160,8 @@ export interface InspectUiOptions {
   timeoutMs?: number;
   waitTimeoutMs?: number;
   tool: string;
+  /** T07:请求级取消信号。 */
+  signal?: AbortSignal;
 }
 
 /** 单个 Control 的探测结果 = 引擎快照 + 由 computeUiIssues 判定的布局问题。 */
@@ -186,6 +196,8 @@ export interface CheckAddonStatusOptions {
   timeoutMs?: number;
   waitTimeoutMs?: number;
   tool: string;
+  /** T07:请求级取消信号。 */
+  signal?: AbortSignal;
 }
 
 /** 引擎 stderr 摘要上限(扩展加载失败会打印多行 ERROR,截断后仍足以定位)。 */
@@ -206,6 +218,12 @@ export interface RuntimeRunResult {
   resolvedPath: string;
   source: GodotSource;
   projectDir: string;
+  /** 仅导出:本次写入的正式路径(绝对路径)。 */
+  outputPath?: string;
+  /** 仅导出:产物是否已从 staging 提交到正式路径。 */
+  outputCommitted?: boolean;
+  /** 不影响成功、但调用方应当看到的提示(例如 staging 目录删不掉)。 */
+  warnings?: string[];
 }
 
 export class RuntimeService {
@@ -226,26 +244,65 @@ export class RuntimeService {
       waitTimeoutMs: o.waitTimeoutMs,
       tool: o.tool,
       target: o.scene ?? projectDir,
+      ...(o.signal ? { signal: o.signal } : {}),
     });
   }
 
-  /** 用预设导出/构建(export_presets.cfg 里的 preset 名)。 */
+  /**
+   * 用预设导出/构建(export_presets.cfg 里的 preset 名)。
+   *
+   * T07:导出到任务专属 staging(系统临时目录),成功后才提交到正式路径。
+   * 取消/失败只丢弃 staging,正式路径自始至终没被碰过 —— 旧构建不可能被半成品覆盖。
+   */
   async exportProject(o: ExportProjectOptions): Promise<RuntimeRunResult> {
     const { path: file, source } = this.locate();
     const projectDir = this.projectDir(o.projectPath);
+    const staging = createExportStaging(o.outputPath);
     const args = buildExportArgs(projectDir, {
+      preset: o.preset,
+      mode: o.mode ?? "release",
+      outputPath: staging.stagingOutputPath,
+      headless: o.headless ?? true,
+      extraArgs: o.extraArgs,
+    });
+    // 展示用的命令仍按调用方给的路径拼,免得日志里出现一串随机临时目录。
+    const displayArgs = buildExportArgs(projectDir, {
       preset: o.preset,
       mode: o.mode ?? "release",
       outputPath: o.outputPath,
       headless: o.headless ?? true,
       extraArgs: o.extraArgs,
     });
-    return this.execute(file, source, projectDir, args, {
-      timeoutMs: o.timeoutMs,
-      waitTimeoutMs: o.waitTimeoutMs,
-      tool: o.tool,
-      target: o.preset,
-    });
+
+    let res: RuntimeRunResult;
+    try {
+      res = await this.execute(file, source, projectDir, args, {
+        timeoutMs: o.timeoutMs,
+        waitTimeoutMs: o.waitTimeoutMs,
+        tool: o.tool,
+        target: o.preset,
+        ...(o.signal ? { signal: o.signal } : {}),
+      });
+    } catch (e) {
+      // 取消 / 超时 / 引擎失败:只丢 staging,正式路径不动。
+      const discarded = discardExportStaging(staging);
+      attachCleanup(e, {
+        processExitConfirmed: !(e instanceof GodotMcpError && (e.details?.["cleanup"] as { processExitConfirmed?: boolean } | undefined)?.processExitConfirmed === false),
+        residual: discarded.residual,
+        ...(discarded.warnings.length > 0 ? { error: discarded.warnings.join("; ") } : {}),
+      });
+      throw e;
+    }
+
+    // 导出成功:此时才动正式路径。移动失败会把 staging 留在原地并报 RUNTIME_FAILED。
+    const committed = commitExportStaging(staging);
+    return {
+      ...res,
+      command: [file, ...displayArgs].join(" "),
+      outputPath: staging.finalPath,
+      outputCommitted: committed.committed,
+      ...(committed.warnings.length > 0 ? { warnings: committed.warnings } : {}),
+    };
   }
 
   /**
@@ -274,11 +331,16 @@ export class RuntimeService {
               outputWidth: o.outputWidth,
               outputHeight: o.outputHeight,
             }),
-            { timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: o.scene ?? "screenshot" },
+            {
+              timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: o.scene ?? "screenshot",
+              ...(o.signal ? { signal: o.signal } : {}),
+            },
           ),
         { prefix: "capture" },
       );
     } catch (e) {
+      // T07:取消/失败时删掉本次任务的临时 PNG —— 它只属于这次调用,调用方拿不到路径也就永远拿不到它。
+      discardScreenshot(outPath);
       // 脚本对场景 load 失败显式 quit(2),映射为 FILE_NOT_FOUND(场景不存在)。
       if (e instanceof GodotMcpError && e.code === "GODOT_PROCESS_FAILED" && e.details?.["exitCode"] === 2) {
         throw new GodotMcpError("FILE_NOT_FOUND", `Scene not found: ${o.scene ?? "(main scene)"}`, {
@@ -353,7 +415,7 @@ export class RuntimeService {
               includeHidden: o.includeHidden ?? false,
               maxNodes,
             }),
-            { timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: o.scene },
+            { timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: o.scene, ...(o.signal ? { signal: o.signal } : {}) },
           ),
         { prefix: "inspect-ui" },
       );
@@ -440,7 +502,7 @@ export class RuntimeService {
           this.execute(
             file, source, projectDir,
             buildCheckAddonStatusArgs(projectDir, scriptPath, requested),
-            { timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: "addon-status" },
+            { timeoutMs: o.timeoutMs, waitTimeoutMs: o.waitTimeoutMs, tool: o.tool, target: "addon-status", ...(o.signal ? { signal: o.signal } : {}) },
           ),
         { prefix: "addon-status" },
       );
@@ -463,6 +525,8 @@ export class RuntimeService {
         ? { ok: true, version: payload.engineVersion }
         : { ok: true, version: payload.engineVersion, stderr: summary };
     } catch (e) {
+      // 取消不是"引擎不可用":它不能被降级成一份静态报告(那会让调用方以为任务跑完了)。
+      if (isCancellation(e)) throw e;
       const err = e instanceof GodotMcpError
         ? e
         : new GodotMcpError("RUNTIME_FAILED", e instanceof Error ? e.message : String(e));
@@ -577,7 +641,7 @@ export class RuntimeService {
     source: GodotSource,
     projectDir: string,
     args: string[],
-    o: { timeoutMs?: number; waitTimeoutMs?: number; tool: string; target: string },
+    o: { timeoutMs?: number; waitTimeoutMs?: number; tool: string; target: string; signal?: AbortSignal },
   ): Promise<RuntimeRunResult> {
     const timeoutMs = o.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
     const runner = this.opts.runner ?? defaultRunRunner;
@@ -586,8 +650,11 @@ export class RuntimeService {
       res = await this.opts.runQueue.runExclusive(
         projectDir,
         { tool: o.tool, target: o.target },
-        (signal) => runner(file, args, { timeoutMs, signal }),
-        { ...(o.waitTimeoutMs !== undefined ? { waitTimeoutMs: o.waitTimeoutMs } : {}) },
+        (taskSignal) => runner(file, args, { timeoutMs, signal: taskSignal }),
+        {
+          ...(o.waitTimeoutMs !== undefined ? { waitTimeoutMs: o.waitTimeoutMs } : {}),
+          ...(o.signal ? { signal: o.signal } : {}),
+        },
       );
     } catch (e) {
       throw mapRunError(e, file);
@@ -600,6 +667,24 @@ export class RuntimeService {
       stderrTruncated: res.stderrTruncated,
       durationMs: res.durationMs,
     };
+    // T07:取消不是超时、也不是引擎失败。子进程已在 runner 内确认退出(exitConfirmed),
+    // 这里只负责把它翻译成 TASK_CANCELLED,并把"到底停没停干净"写进 cleanup。
+    if (res.aborted) {
+      throw new TaskCancelledError(`Task ${o.tool} was cancelled by the caller`, {
+        operation: o.tool,
+        stage: "cleanup",
+        abortSource: "request",
+        resolvedPath: file,
+        source,
+        command,
+        cleanup: {
+          processExitConfirmed: res.exitConfirmed !== false,
+          ...(res.pid === undefined ? {} : { pid: res.pid }),
+          ...(res.exitConfirmed === false ? { residual: [`godot process (pid ${res.pid ?? "unknown"}) did not confirm exit`] } : {}),
+        },
+        ...logs,
+      });
+    }
     if (res.timedOut) {
       throw new GodotMcpError("TASK_TIMEOUT", `Godot did not exit within ${timeoutMs}ms and was killed`, {
         timeoutMs, resolvedPath: file, source, command, ...logs,
@@ -622,6 +707,14 @@ export class RuntimeService {
 /** 把数值夹到 [min, max](工具层已按 schema 校验,这里是服务层的兜底)。 */
 function clampInt(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(v)));
+}
+
+/**
+ * 删掉本次任务未交付的截图。只删我们自己在系统临时目录里生成的那一个路径,
+ * 不做任何 glob/目录级删除 —— 取消不能顺手清掉别人的文件。
+ */
+function discardScreenshot(filePath: string): void {
+  try { fs.rmSync(filePath, { force: true }); } catch { /* 删不掉只是临时目录残留,不影响取消语义 */ }
 }
 
 /** spawn 阶段的错误 → 统一错误码:ENOENT 归 GODOT_NOT_FOUND,其余归 GODOT_PROCESS_FAILED。 */

@@ -1,7 +1,8 @@
 import { GodotMcpError, errorCategory, errorRetryable } from "../../core/errors.js";
+import { cancelledError, isCancellation } from "../../core/concurrency/cancellation.js";
 import { createPermissionPolicy, type PermissionPolicy } from "../../core/permissions.js";
 import { validate } from "../../core/validation/schema.js";
-import type { JsonSchema, Logger, ToolAnnotations, ToolDomain, ToolResult } from "../../types/index.js";
+import type { JsonSchema, Logger, ToolAnnotations, ToolDomain, ToolExecutionContext, ToolResult } from "../../types/index.js";
 import type { ToolRegistry } from "../registry/toolRegistry.js";
 
 export interface ToolListing { name: string; description: string; inputSchema: JsonSchema; annotations: ToolAnnotations; runtimeRequired: boolean }
@@ -32,10 +33,15 @@ export class ToolHost<Ctx> {
     return this.policy.summary();
   }
 
-  async callTool(name: string, rawArgs: unknown): Promise<ToolResult> {
+  async callTool(name: string, rawArgs: unknown, exec?: ToolExecutionContext): Promise<ToolResult> {
     const tool = this.registry.get(name);
     if (!tool || (this.enabled && this.enabled.size > 0 && !this.enabled.has(tool.domain))) {
       return fail("TOOL_NOT_FOUND", `Unknown tool: ${name}`);
+    }
+    // T07:请求在真正开始执行前就被取消时,连锁都不碰 —— 不启动进程、不写文件。
+    // (SDK 侧已丢弃响应,这里只是不浪费资源;进程内调用方也能拿到确定的 TASK_CANCELLED。)
+    if (exec?.signal?.aborted) {
+      return fromGodotError(cancelledError({ operation: name, stage: "queue", signal: exec.signal, hint: "Request was already cancelled." }));
     }
     // 权限先于参数校验:只读模式下写工具直接拒绝,不因为参数不合法而给出别的错误码。
     const args = (rawArgs ?? {}) as Record<string, unknown>;
@@ -54,7 +60,12 @@ export class ToolHost<Ctx> {
       });
     }
     try {
-      const out = await tool.handler(v.value as Record<string, unknown>, this.ctx);
+      const out = await tool.handler(v.value as Record<string, unknown>, this.ctx, exec);
+      // 执行期间被取消:不允许把"取消后完成的活"当成功回给客户端。
+      // (长任务在 TaskQueue 里已经拦过一层,这里覆盖不经过队列的 handler。)
+      if (exec?.signal?.aborted) {
+        return fromGodotError(cancelledError({ operation: name, stage: "running", signal: exec.signal }));
+      }
       return {
         ok: true, data: out.data,
         ...(out.message !== undefined ? { message: out.message } : {}),
@@ -64,7 +75,11 @@ export class ToolHost<Ctx> {
         ...(out.image ? { image: out.image } : {}),
       };
     } catch (e) {
-      if (e instanceof GodotMcpError) return fail(e.code, e.message, e.details);
+      if (e instanceof GodotMcpError) {
+        // 取消不是 bug,不打 INTERNAL 堆栈(避免污染错误统计),但要留下一条 warn 便于排查。
+        if (isCancellation(e)) this.logger.warn(`Tool ${name} was cancelled`, e.details);
+        return fromGodotError(e);
+      }
       // 未预期异常:保留类型名与首行信息用于定位,但不把完整堆栈泄给客户端。
       this.logger.error(`Unhandled error in ${name}`, e instanceof Error ? e.stack : String(e));
       return fail("INTERNAL", e instanceof Error ? e.message : String(e), {
@@ -78,6 +93,11 @@ export class ToolHost<Ctx> {
 
 function fail(code: Extract<ToolResult, { ok: false }>["error"]["code"], message: string, details?: Record<string, unknown>): ToolResult {
   return { ok: false, error: { code, category: errorCategory(code), retryable: errorRetryable(code), message, ...(details ? { details } : {}) } };
+}
+
+/** GodotMcpError → 统一错误信封。取消也走这里:category/retryable 由 code 表统一推导。 */
+function fromGodotError(e: GodotMcpError): ToolResult {
+  return fail(e.code, e.message, e.details);
 }
 
 /** MCP 内容块(text / image)。image 结构遵循 MCP 规范:{ type: "image", data(base64), mimeType }。 */

@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GodotMcpError } from "../core/errors.js";
+import { TaskCancelledError, throwIfAborted } from "../core/concurrency/cancellation.js";
 import type { TaskQueue } from "../core/concurrency/taskQueue.js";
 import type { ProjectResolver } from "../core/project/projectResolver.js";
 import {
@@ -165,12 +166,12 @@ export class GodotApiService {
   constructor(private readonly opts: GodotApiServiceOptions) {}
 
   /** 取一个类的 ClassDB 信息;类不存在抛 INVALID_ARGUMENT(不猜、不静默返回空表)。 */
-  async getClassInfo(projectPath: string | undefined, nodeType: string): Promise<ClassInfo> {
+  async getClassInfo(projectPath: string | undefined, nodeType: string, signal?: AbortSignal): Promise<ClassInfo> {
     const requested = typeof nodeType === "string" ? nodeType.trim() : "";
     if (requested === "") {
       throw new GodotMcpError("INVALID_ARGUMENT", "nodeType 不能为空(需要 Godot 类名,如 Node2D)", { param: "nodeType", nodeType });
     }
-    const loaded = await this.load(this.opts.project.resolve(projectPath));
+    const loaded = await this.load(this.opts.project.resolve(projectPath), signal);
     const cls = loaded.api.classes.get(requested);
     if (!cls) {
       throw new GodotMcpError("INVALID_ARGUMENT", `ClassDB 里没有这个类: ${JSON.stringify(nodeType)}`, {
@@ -212,8 +213,8 @@ export class GodotApiService {
     };
   }
 
-  async searchClasses(projectPath: string | undefined, query: string, limit = 100): Promise<{ name: string; inherits?: string; apiType: string; isInstantiable: boolean }[]> {
-    const loaded = await this.load(this.opts.project.resolve(projectPath)); const q = query.trim().toLowerCase();
+  async searchClasses(projectPath: string | undefined, query: string, limit = 100, signal?: AbortSignal): Promise<{ name: string; inherits?: string; apiType: string; isInstantiable: boolean }[]> {
+    const loaded = await this.load(this.opts.project.resolve(projectPath), signal); const q = query.trim().toLowerCase();
     return [...loaded.api.classes.values()].filter((c) => !q || c.name.toLowerCase().includes(q)).slice(0, Math.max(1, Math.min(limit, 500))).map((c) => ({ name: c.name, ...(c.inherits ? { inherits: c.inherits } : {}), apiType: c.apiType, isInstantiable: c.isInstantiable }));
   }
 
@@ -383,7 +384,8 @@ export class GodotApiService {
   // ────────────────────────────── 内部 ──────────────────────────────
 
   /** 命中内存/磁盘缓存就直接用;磁盘缓存损坏(解析失败)才删除并重新 dump。 */
-  private async load(root: string): Promise<LoadedApi> {
+  private async load(root: string, signal?: AbortSignal): Promise<LoadedApi> {
+    throwIfAborted(signal, "classdb.dump", "queue");
     const cacheFile = this.cacheFileFor(root, await this.engineVersion());
     const hit = this.memory.get(cacheFile);
     if (hit) return { api: hit, cacheFile, fromCache: true };
@@ -396,7 +398,7 @@ export class GodotApiService {
       }
     }
 
-    const api = await this.dump(root, path.dirname(cacheFile), cacheFile);
+    const api = await this.dump(root, path.dirname(cacheFile), cacheFile, signal);
     this.memory.set(cacheFile, api);
     return { api, cacheFile, fromCache: false };
   }
@@ -415,7 +417,7 @@ export class GodotApiService {
   }
 
   /** 跑一次 `--dump-extension-api`(cwd 指向缓存目录),校验产物后原子落成缓存文件。 */
-  private async dump(root: string, dir: string, cacheFile: string): Promise<ExtensionApi> {
+  private async dump(root: string, dir: string, cacheFile: string, signal?: AbortSignal): Promise<ExtensionApi> {
     const exe = this.locate();
     fs.mkdirSync(dir, { recursive: true });
     const produced = path.join(dir, EXTENSION_API_FILE);
@@ -428,7 +430,8 @@ export class GodotApiService {
       res = await this.opts.runQueue.runExclusive(
         root,
         { tool: "scene_get_node_info", target: EXTENSION_API_FILE },
-        (signal) => runner(exe, buildDumpExtensionApiArgs(), { timeoutMs, signal, cwd: dir }),
+        (taskSignal) => runner(exe, buildDumpExtensionApiArgs(), { timeoutMs, signal: taskSignal, cwd: dir }),
+        { ...(signal ? { signal } : {}) },
       );
     } catch (e) {
       fs.rmSync(produced, { force: true });
@@ -437,6 +440,20 @@ export class GodotApiService {
 
     const logs = { resolvedPath: exe, stdout: res.stdout, stderr: res.stderr, cacheFile, cwd: dir };
     try {
+      // T07:取消不是"引擎失败"。半成品已由 finally 清掉,这里只如实回报进程是否确认退出。
+      if (res.aborted) {
+        throw new TaskCancelledError("ClassDB API dump was cancelled by the caller", {
+          operation: "classdb.dump",
+          stage: "cleanup",
+          abortSource: "request",
+          cleanup: {
+            processExitConfirmed: res.exitConfirmed !== false,
+            ...(res.pid === undefined ? {} : { pid: res.pid }),
+            residual: [],
+          },
+          ...logs,
+        });
+      }
       if (res.timedOut) {
         throw new GodotMcpError("GODOT_PROCESS_FAILED", `Godot did not exit within ${timeoutMs}ms while dumping the ClassDB API`, { timeoutMs, ...logs });
       }
@@ -450,11 +467,13 @@ export class GodotApiService {
         throw new GodotMcpError("GODOT_PROCESS_FAILED", `Godot exited successfully but wrote no ${EXTENSION_API_FILE} in ${dir}`, logs);
       }
       const api = parseExtensionApi(text); // 结构不合法 → PARSE_ERROR,由上层看到"引擎产物不可用"
+      // 已经解析完才收到取消:不要再往缓存目录提交,直接把这次结果当取消处理。
+      throwIfAborted(signal, "classdb.dump", "running");
       fs.rmSync(cacheFile, { force: true });
       fs.renameSync(produced, cacheFile);
       return api;
     } finally {
-      fs.rmSync(produced, { force: true }); // 成功时已被 rename 掉;失败时清掉半成品
+      fs.rmSync(produced, { force: true }); // 成功时已被 rename 掉;失败/取消时清掉半成品
     }
   }
 

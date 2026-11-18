@@ -18,7 +18,7 @@ export const runtimeInspectUi: ToolDefinition<AppContext> = {
     "nodePaths (relative to the scene root, '.' = root) inspects only those nodes; paths that do not resolve to a Control are returned " +
     "in missing[] instead of failing the call. Returns scene, viewportSize, nodeCount (before truncation), truncated, nodes[], missing[], " +
     "summary, engineVersion and durationMs (wall time of the Godot process). Fails with GODOT_NOT_FOUND / FILE_NOT_FOUND / " +
-    "GODOT_PROCESS_FAILED / TASK_TIMEOUT / RUNTIME_FAILED.",
+    "GODOT_PROCESS_FAILED / TASK_TIMEOUT / RUNTIME_FAILED. Cancelling the request (MCP notifications/cancelled) kills the Godot process and returns TASK_CANCELLED (category=cancelled, retryable=false); the project run slot stays locked until that process is confirmed dead.",
   inputSchema: {
     type: "object",
     required: ["scene"],
@@ -42,7 +42,7 @@ export const runtimeInspectUi: ToolDefinition<AppContext> = {
   annotations: { readOnly: false, idempotent: true },
   runtimeRequired: true,
   dependency: "godot",
-  async handler(args, ctx) {
+  async handler(args, ctx, exec) {
     const width = args["width"] as number | undefined;
     const height = args["height"] as number | undefined;
     if ((width === undefined) !== (height === undefined)) {
@@ -60,6 +60,7 @@ export const runtimeInspectUi: ToolDefinition<AppContext> = {
       timeoutMs: args["timeoutMs"] as number | undefined,
       waitTimeoutMs: args["waitTimeoutMs"] as number | undefined,
       tool: "runtime_inspect_ui",
+      ...(exec?.signal ? { signal: exec.signal } : {}),
     });
     return {
       data: {

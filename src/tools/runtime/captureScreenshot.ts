@@ -11,7 +11,8 @@ export const runtimeCaptureScreenshot: ToolDefinition<AppContext> = {
     "resize the output image (they do not change what the engine renders). The scene runs inside a temporary GDScript " +
     "via --script (never written into the user project). Returns the screenshot file path, render/output sizes, file " +
     "size and duration, and (when includeImage is true and the file is ≤1MB) an inline base64 image content block. " +
-    "Fails with GODOT_NOT_FOUND / FILE_NOT_FOUND / GODOT_PROCESS_FAILED / TASK_TIMEOUT / RUNTIME_FAILED.",
+    "Fails with GODOT_NOT_FOUND / FILE_NOT_FOUND / GODOT_PROCESS_FAILED / TASK_TIMEOUT / RUNTIME_FAILED. " +
+    "Cancelling the request (MCP notifications/cancelled) kills the Godot process and returns TASK_CANCELLED (category=cancelled, retryable=false); the project run slot stays locked until that process is confirmed dead. The temporary PNG is deleted.",
   inputSchema: {
     type: "object",
     properties: {
@@ -28,7 +29,7 @@ export const runtimeCaptureScreenshot: ToolDefinition<AppContext> = {
   annotations: { readOnly: false, idempotent: false },
   runtimeRequired: true,
   dependency: "godot",
-  async handler(args, ctx) {
+  async handler(args, ctx, exec) {
     const outputWidth = args["outputWidth"] as number | undefined;
     const outputHeight = args["outputHeight"] as number | undefined;
     if ((outputWidth === undefined) !== (outputHeight === undefined)) {
@@ -45,6 +46,7 @@ export const runtimeCaptureScreenshot: ToolDefinition<AppContext> = {
       waitTimeoutMs: args["waitTimeoutMs"] as number | undefined,
       includeImage,
       tool: "runtime_capture_screenshot",
+      ...(exec?.signal ? { signal: exec.signal } : {}),
     });
     const data = {
       filePath: result.filePath,

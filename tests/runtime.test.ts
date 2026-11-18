@@ -164,11 +164,19 @@ test("runProject 超时 → TASK_TIMEOUT", async (t) => {
   });
 });
 
-test("exportProject 构建导出参数(mode=debug + outputPath)", async (t) => {
+test("exportProject 构建导出参数(mode=debug),产物先落 staging 再提交", async (t) => {
   const log: Array<{ file: string; args: readonly string[]; timeoutMs: number }> = [];
   const { dir, svc } = makeRuntime(t, recordingRunner({}, log));
   await svc.exportProject({ tool: "runtime_export_project", preset: "windows", mode: "debug", outputPath: "build/game.exe" });
-  assert.deepEqual(log[0]?.args, ["--path", dir, "--headless", "--export-debug", "windows", "build/game.exe"]);
+  const args = log[0]?.args ?? [];
+  // 前 4 项是项目与模式标志,T07 之后输出路径指向任务专属 staging(系统临时目录),不再直写正式路径。
+  assert.deepEqual(args.slice(0, 5), ["--path", dir, "--headless", "--export-debug", "windows"]);
+  const stagingOut = args[5]!;
+  assert.ok(path.isAbsolute(stagingOut), `export path should be absolute staging path, got ${stagingOut}`);
+  assert.ok(stagingOut.startsWith(os.tmpdir()), `export path should live under the temp dir, got ${stagingOut}`);
+  assert.equal(path.basename(stagingOut), "game.exe");
+  // 正式路径在导出成功前不应被创建/覆盖。
+  assert.equal(fs.existsSync(path.join(dir, "build", "game.exe")), false);
 });
 
 test("GODOT_PATH 指向不存在文件 → GODOT_NOT_FOUND", async (t) => {
