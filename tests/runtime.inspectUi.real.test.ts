@@ -93,7 +93,8 @@ test(
     // 顶层字段
     assert.equal(data.scene, SCENE);
     assert.deepEqual(data.viewportSize, { width: 640, height: 360 }); // 来自 project.godot 的 viewport 设置
-    assert.match(data.engineVersion, /^4\.\d+\.\d+/);
+    // 同 runtime.checkAddonStatus:补丁位为 0 时版本串只有两段(4.6-stable (official))。
+    assert.match(data.engineVersion, /^4\.\d+(\.\d+)?/);
     assert.equal(data.truncated, false);
     assert.deepEqual(data.missing, []);
     assert.ok(data.durationMs > 0);

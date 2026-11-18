@@ -111,7 +111,8 @@ test("real: classes 查询 —— Node2D 注册且可实例化,NoSuchClass123 �
 
   const r = await check({ classes: ["Node2D", "NoSuchClass123"] });
   assert.equal(r.engine.ok, true, JSON.stringify(r.engine));
-  assert.match((r.engine as { version: string }).version, /^4\.\d+\.\d+/);
+  // 版本串由引擎的 MAJOR.MINOR[.PATCH] 拼成:补丁位为 0 时省略(4.6 active 版是 "4.6-stable (official)")。
+  assert.match((r.engine as { version: string }).version, /^4\.\d+(\.\d+)?/);
   assert.equal((r.engine as { stderr?: string }).stderr, undefined, "脚本先判 exists,不应有引擎报错输出");
   assert.deepEqual(r.classes?.["Node2D"], { exists: true, can_instantiate: true });
   assert.deepEqual(r.classes?.["NoSuchClass123"], { exists: false, can_instantiate: false });

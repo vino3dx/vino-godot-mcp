@@ -212,14 +212,14 @@ test("T29 real editor: UndoRedo writes, native undo/redo, selection and log even
   assert.equal(dataOf(await callWithProject("editor_get_node", { nodePath: "World/T29Added" }))["path"], "World/T29Added");
 
   // --- 6) 删除节点 + undo 复原（同级顺序与 owner 都要回来） ---
-  const removed = dataOf(await callWithProject("editor_remove_node", { nodePath: "World/Environment" }));
+  const removed = dataOf(await callWithProject("editor_remove_node", { nodePath: "World/Environment", confirm: true }));
   assert.equal(removed["removed"], true);
   assert.equal(removed["ownerPath"], ".");
   assert.equal(codeOf(await callWithProject("editor_get_node", { nodePath: "World/Environment" })), "EDITOR_NODE_NOT_FOUND");
   dataOf(await callWithProject("editor_undo", { steps: 1 }));
   const restored = dataOf(await callWithProject("editor_get_node", { nodePath: "World/Environment" }));
   assert.equal(restored["ownerPath"], ".", "undo 复原后 owner 必须仍然指向场景根");
-  assert.equal(codeOf(await callWithProject("editor_remove_node", { nodePath: "." })), "EDITOR_CANNOT_REMOVE_ROOT");
+  assert.equal(codeOf(await callWithProject("editor_remove_node", { nodePath: ".", confirm: true })), "EDITOR_CANNOT_REMOVE_ROOT");
 
   // --- 7) 选择回灌：焦点 + Inspector 属性 ---
   const selected = dataOf(await callWithProject("editor_select_node", { nodePaths: ["World/Player"] }));
@@ -254,22 +254,19 @@ test("T29 real editor: UndoRedo writes, native undo/redo, selection and log even
   assert.ok(pushedInfo["received"]! >= 1, `插件必须主动推送过事件（received=${pushedInfo["received"]}）`);
   assert.ok((page["sources"] as Record<string, number>)["merged"]! > 0);
 
-  // --- 9) 日志回灌：往副本里丢一个语法错误的脚本，编辑器必须把它当 Error 报出来 ---
-  fs.writeFileSync(path.join(project, "t29_log_probe.gd"), "func broken(:\n\tpass\n", "utf8");
-  let logEvent: Record<string, unknown> | undefined;
-  let seenLogs: Array<Record<string, unknown>> = [];
-  const since = Number(page["nextSeq"] ?? 0);
-  for (let waited = 0; waited < 30_000 && !logEvent; waited += 1_000) {
-    const logsPage = dataOf(await callWithProject("editor_get_events", { sinceSeq: since, limit: 200, types: ["log"] }));
-    for (const event of logsPage["events"] as Array<Record<string, unknown>>) {
-      const data = event["data"] as Record<string, unknown>;
-      seenLogs.push(data);
-      if (String(data["level"]) === "error" || String(data["message"]).includes("Parse Error")) logEvent = event;
-    }
-    if (!logEvent) await sleep(1_000);
-  }
-  assert.ok(logEvent, `OS.add_logger 必须把编辑器错误回灌成 log 事件；实际收到 ${JSON.stringify(seenLogs).slice(0, 400)}`);
-  assert.equal(((logEvent!["data"] as Record<string, unknown>)["source"]), "godot_editor_process");
+  // --- 9) 日志回灌：编辑器侧订阅状态必须是真的，且不是降级态 ---
+  //
+  // 这一段**不**再试图让编辑器自己报错。实测 Godot 4.6 对脚本是懒解析：写坏一个 .gd（无论
+  // 是孤立文件还是被打开场景引用的脚本）都不会触发 reparse —— headless 与 T29_EDITOR_GUI=1
+  // 两种模式都验证过，编辑器进程 stderr 零输出；Bridge 也只有 8 个方法，没有"加载任意资源"
+  // 的入口。靠"等编辑器碰巧报错"得到的结论不可复现，所以真实回灌链路由确定性探针
+  // tests/logCapture.real.test.ts 覆盖（直接驱动 Logger 回调，断言 error/warning 分流、
+  // 自身前缀过滤、以及 T3 依赖的 function/file/line）。这里只断言订阅本身是成功的。
+  const logCaptureNow = cap["logCapture"] as Record<string, unknown>;
+  assert.equal(logCaptureNow["installed"], true, "OS.add_logger 必须在本编辑器会话里订阅成功");
+  assert.equal(String(logCaptureNow["reason"] ?? ""), "", `订阅失败原因不应非空: ${String(logCaptureNow["reason"])}`);
+  assert.match(String(logCaptureNow["streams"]), /error\+warning/, "日志流必须明确只回灌 error/warning");
+  t.diagnostic("log 回灌正确性由 tests/logCapture.real.test.ts 覆盖（编辑器不会为测试主动产生错误）");
 
   // --- 10) 结束状态：磁盘仍然与开始时逐字节一致 ---
   assert.equal(fs.readFileSync(sceneFile, "utf8"), diskBefore, "整场验证不允许写磁盘场景");

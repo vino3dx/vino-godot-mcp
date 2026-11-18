@@ -34,7 +34,9 @@ test(
     assert.equal(res.signal, null);
     // 版本串落在捕获的两个流之一:证明子进程输出进了管道(stdout/stderr 分离捕获),
     // 而非继承本进程 stdout —— 这是"不污染 MCP stdout"的结构性保证。
-    assert.match(res.stdout + res.stderr, /\d+\.\d+\.\d+/);
+    // Godot 的版本串是 MAJOR.MINOR[.PATCH].{stable|beta|rc}.{official|custom}.<hash>:
+    // patch 为 0 时第三段整体省略(例如 4.6.stable.official.89cea1439),所以不能强制三段式。
+    assert.match(res.stdout + res.stderr, /\d+\.\d+(\.\d+)?/);
   },
 );
 
