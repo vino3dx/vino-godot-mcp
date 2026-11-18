@@ -11,7 +11,16 @@ export interface ProcessAdapterHandle {
   onStdout(listener: (chunk: Buffer) => void): () => void;
   onStderr(listener: (chunk: Buffer) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
+  /**
+   * 发信号。返回是否成功投递(false = 进程已退出或信号发不出去)。
+   * 注意:返回 true 只代表信号发出去了,**不代表进程已经死**;确认退出只能看 `exited`。
+   */
   stop(signal?: NodeJS.Signals): Promise<boolean>;
+  /**
+   * 放弃这个子进程(不再等待、不再收集输出):摘掉 stream 监听与订阅者。
+   * 只用于"退出无法确认"的兜底路径 —— 调用方拿不到退出码,必须按未确认退出处理。
+   */
+  dispose(): void;
 }
 export type SpawnProcess = (file: string, args: readonly string[], options: ProcessAdapterOptions) => ChildProcess;
 
@@ -28,15 +37,18 @@ export class ProcessAdapter {
     const stderrListeners = new Set<(chunk: Buffer) => void>();
     const errorListeners = new Set<(error: Error) => void>();
     let startupError: Error | undefined;
-    const onData = (stream: Readable | null, listeners: Set<(chunk: Buffer) => void>): void => {
-      if (!stream) return;
-      stream.on("data", (chunk: Buffer | string) => {
+    /** 返回解绑函数:abort 后放弃子进程时要把 stream 监听也摘掉,不然会一直挂着排空管道。 */
+    const onData = (stream: Readable | null, listeners: Set<(chunk: Buffer) => void>): (() => void) => {
+      if (!stream) return () => {};
+      const handler = (chunk: Buffer | string): void => {
         const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         for (const listener of [...listeners]) listener(data);
-      });
+      };
+      stream.on("data", handler);
+      return () => stream.off("data", handler);
     };
-    onData(child.stdout, stdoutListeners);
-    onData(child.stderr, stderrListeners);
+    const detachStdout = onData(child.stdout, stdoutListeners);
+    const detachStderr = onData(child.stderr, stderrListeners);
 
     let exited = false;
     let spawnSettled = false;
@@ -61,6 +73,14 @@ export class ProcessAdapter {
       onStderr: (listener) => subscribe(stderrListeners, listener, exited),
       onError: (listener) => { if (startupError) { listener(startupError); return () => {}; } return subscribe(errorListeners, listener, exited); },
       stop: (signal = "SIGTERM") => Promise.resolve(exited ? false : child.kill(signal)),
+      dispose: () => {
+        detachStdout();
+        detachStderr();
+        stdoutListeners.clear(); stderrListeners.clear(); errorListeners.clear();
+        // 管道另一端的读取端也关掉:即使进程还活着,也不再占用本进程的 fd 与内存。
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      },
     };
   }
 }

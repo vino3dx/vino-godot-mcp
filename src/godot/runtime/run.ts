@@ -10,6 +10,7 @@
 // CLI 选项拼写已对照 tests/fixtures/godot-help.txt(真实 Godot 4.6.3 `--help` 输出)复验:
 //   --path <directory> / --headless / --quit / --scene <path> / --export-release|--export-debug <preset> <path>。
 import { decodeProcessOutput, type DecodedText } from "../../core/outputEncoding.js";
+import { TaskCancelledError, TaskTimeoutError } from "../../core/concurrency/cancellation.js";
 import { ProcessAdapter } from "./processAdapter.js";
 
 /** 单个流的捕获上限,防止失控输出导致无界内存增长。 */
@@ -32,7 +33,17 @@ export interface RunProcessResult {
   /** 退出码;被信号杀死时为 null。 */
   exitCode: number | null;
   signal: NodeJS.Signals | null;
+  /** 到点杀进程(执行超时),与 aborted 互斥:两者都只有一个来源。 */
   timedOut: boolean;
+  /**
+   * 被外部信号中止(调用方取消)。T07 之前它与 timedOut 共用一个标志,
+   * 导致取消被报成 TASK_TIMEOUT 且 retryable=true —— AI 会立刻重试,再起一个 Godot。
+   */
+  aborted?: boolean;
+  /** 进程是否已确认退出(真实 runner 总是 true;只有"放弃等待"的兜底路径才会是 false)。 */
+  exitConfirmed?: boolean;
+  /** 子进程 PID(诊断用;spawn 失败时可能没有)。 */
+  pid?: number;
   stdout: string;
   stderr: string;
   stdoutTruncated: boolean;
@@ -114,19 +125,42 @@ export function buildExportArgs(projectDir: string, mode: ExportMode): string[] 
   return args;
 }
 
+/** 发出 SIGKILL 之后等 close 的宽限。超时就升级重杀,并把"未确认退出"如实上报。 */
+export const EXIT_CONFIRM_GRACE_MS = 3_000;
+/** 升级重杀之后仍然等不到的硬上限:到这还没退出就放弃等待(锁由上层继续持有到此刻)。 */
+export const EXIT_CONFIRM_HARD_CAP_MS = 120_000;
+
 /**
  * 真实 spawn 实现:启动进程、分离收集两个流、到点杀进程、归一化退出信息。
  * 失败(如 ENOENT)通过 reject 抛出,由 service 层映射为 GODOT_NOT_FOUND。
+ *
+ * T07 的终止协议:
+ *   1. 取消 / 超时都只发 SIGKILL(Windows 上即 TerminateProcess),然后**等 close**;
+ *   2. 只有 close 到达才 settle(resolve 正常结束 / reject 取消)—— 调用方据此释放项目锁,
+ *      不会出现"锁放了、进程还在写";取消走 reject,是为了让 pid、退出确认和输出这些
+ *      证据随错误一起带出去,而不是藏在一个没人读的返回值字段里;
+ *   3. 宽限内没等到 close:再杀一次,并 reject 一个带 `pendingExit` 的中断错误。
+ *      TaskQueue 看到 pendingExit 会继续持有锁,直到进程真的退出(或到硬上限);
+ *   4. 放弃等待时摘掉 stdout/stderr 监听并关闭管道,不泄漏 fd,也不继续吞输出。
  */
 export function defaultRunRunner(
   file: string,
   args: readonly string[],
   opts: RunProcessOptions,
 ): Promise<RunProcessResult> {
-  return new Promise((resolve, reject) => {
+  return createRunRunner(processAdapter)(file, args, opts);
+}
+
+/**
+ * 用指定 adapter 构造 runner。存在的唯一理由是**可测**:退出无法确认的兜底路径
+ * 只能用"永远不 close 的假子进程"触发,而模块级单例 adapter 无法注入。
+ * 生产代码只使用上面的 defaultRunRunner,行为完全一致。
+ */
+export function createRunRunner(adapter: ProcessAdapter): GodotRunRunner {
+  return (file, args, opts) => new Promise<RunProcessResult>((resolve, reject) => {
     const start = Date.now();
     let child;
-    try { child = processAdapter.start(file, args, { cwd: opts.cwd }); }
+    try { child = adapter.start(file, args, { cwd: opts.cwd }); }
     catch (e) {
       reject(e);
       return;
@@ -140,38 +174,80 @@ export function defaultRunRunner(
 
     let settled = false;
     let timedOut = false;
+    let aborted = false;
     let timer: NodeJS.Timeout | undefined;
+    let confirmTimer: NodeJS.Timeout | undefined;
 
-    const kill = (): void => {
-      timedOut = true;
-      void child.stop("SIGKILL");
+    const detach = (): void => {
+      if (timer) clearTimeout(timer);
+      if (confirmTimer) clearTimeout(confirmTimer);
+      timer = undefined;
+      confirmTimer = undefined;
+      if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+      unsubscribeStdout(); unsubscribeStderr(); unsubscribeError();
     };
 
+    /**
+     * 中断(取消/超时)统一入口:只有一个来源生效(先到先算),
+     * 第二个来源不改变已定的性质 —— 否则取消会被后到的超时"洗"成 TASK_TIMEOUT。
+     */
+    const interrupt = (kind: "abort" | "timeout"): void => {
+      // settled 之后到达的取消不改变已经确定的结果(进程都退了,再标 aborted 只会
+      // 让上层把一个已完成的运行误判成取消)。
+      if (settled || timedOut || aborted) return;
+      if (kind === "abort") aborted = true; else timedOut = true;
+      void child.stop("SIGKILL");
+      confirmTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // 升级:再发一次 SIGKILL(第一次可能发生在 spawn 完成前,pid 还没拿到)。
+        void child.stop("SIGKILL");
+        detach();
+        const pid = child.pid;
+        // pendingExit 在进程真正 close 或到达硬上限后 settle;它 settle 之前上层不得放锁。
+        const pendingExit = Promise.race([
+          child.exited.then(() => undefined),
+          delay(EXIT_CONFIRM_HARD_CAP_MS).then(() => undefined),
+        ]).then(() => { child.dispose(); }, () => { child.dispose(); });
+        const details = {
+          resolvedPath: file,
+          pid,
+          abortSource: kind,
+          stage: "cleanup" as const,
+          cleanup: {
+            processExitConfirmed: false,
+            ...(pid === undefined ? {} : { pid }),
+            residual: [`process did not exit within ${EXIT_CONFIRM_GRACE_MS}ms of SIGKILL`],
+          },
+          hint: "The process may still be running. The project lock stays held until it exits, so no conflicting task starts.",
+        };
+        reject(kind === "abort"
+          ? new TaskCancelledError(`Godot process (pid ${pid ?? "unknown"}) was cancelled but had not exited after ${EXIT_CONFIRM_GRACE_MS}ms`, details, pendingExit)
+          : new TaskTimeoutError(`Godot process (pid ${pid ?? "unknown"}) was killed after ${opts.timeoutMs}ms but had not exited ${EXIT_CONFIRM_GRACE_MS}ms later`, { ...details, timeoutMs: opts.timeoutMs }, pendingExit));
+      }, EXIT_CONFIRM_GRACE_MS);
+      confirmTimer.unref?.();
+    };
+    const onAbort = (): void => interrupt("abort");
+
     if (opts.signal) {
-      if (opts.signal.aborted) kill();
-      else opts.signal.addEventListener("abort", kill, { once: true });
+      if (opts.signal.aborted) interrupt("abort");
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
-    timer = setTimeout(kill, opts.timeoutMs);
+    timer = setTimeout(() => interrupt("timeout"), opts.timeoutMs);
 
     const unsubscribeError = child.onError((e) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      if (opts.signal) opts.signal.removeEventListener("abort", kill);
-      unsubscribeStdout(); unsubscribeStderr(); unsubscribeError();
+      detach();
       reject(e);
     });
     void child.exited.then(({ exitCode, signal }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      if (opts.signal) opts.signal.removeEventListener("abort", kill);
+      detach();
       const out = decodeProcessOutput(Buffer.concat(stdout.chunks), { truncated: stdout.truncated });
       const err = decodeProcessOutput(Buffer.concat(stderr.chunks), { truncated: stderr.truncated });
-      resolve({
-        exitCode,
-        signal,
-        timedOut,
+      const logs = {
         stdout: out.text,
         stderr: err.text,
         stdoutTruncated: stdout.truncated,
@@ -179,8 +255,49 @@ export function defaultRunRunner(
         stdoutEncoding: out.encoding,
         stderrEncoding: err.encoding,
         durationMs: Date.now() - start,
+        exitCode,
+        signal,
+      };
+      // 取消后进程确实停下来了:用 reject 而不是"resolve 一个 aborted 结果"上报。
+      // 原因:resolve 的返回值会被上层当成正常结束,pid / 退出确认 / 输出这些证据
+      // 只有在错误里才会被完整带出去(TaskQueue 会原样保留 TaskCancelledError)。
+      // 走到这里说明 close 已到达 → exitConfirmed 为 true,项目锁可以立刻归还。
+      if (aborted) {
+        const pid = child.pid;
+        reject(new TaskCancelledError(`Godot process (pid ${pid ?? "unknown"}) was cancelled and has exited`, {
+          resolvedPath: file,
+          pid,
+          abortSource: "request",
+          stage: "cleanup",
+          cleanup: { processExitConfirmed: true, ...(pid === undefined ? {} : { pid }) },
+          ...logs,
+        }));
+        return;
+      }
+      resolve({
+        exitCode,
+        signal,
+        timedOut,
+        aborted,
+        exitConfirmed: true,
+        ...(child.pid === undefined ? {} : { pid: child.pid }),
+        stdout: logs.stdout,
+        stderr: logs.stderr,
+        stdoutTruncated: logs.stdoutTruncated,
+        stderrTruncated: logs.stderrTruncated,
+        stdoutEncoding: logs.stdoutEncoding,
+        stderrEncoding: logs.stderrEncoding,
+        durationMs: logs.durationMs,
       });
     });
+  });
+}
+
+/** 简单的毫秒等待(硬上限用);unref 掉,不阻止进程退出。 */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    t.unref?.();
   });
 }
 

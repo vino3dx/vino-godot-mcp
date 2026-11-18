@@ -15,6 +15,7 @@ class FakeHandle implements ProcessAdapterHandle {
   onStderr(listener: (chunk: Buffer) => void): () => void { this.stderr.add(listener); return () => this.stderr.delete(listener); }
   onError(listener: (error: Error) => void): () => void { this.errors.add(listener); return () => this.errors.delete(listener); }
   stop(): Promise<boolean> { this.stopped = true; return Promise.resolve(true); }
+  dispose(): void { this.stdout.clear(); this.stderr.clear(); this.errors.clear(); }
   emitSpawn(): void { this.spawnResolve(); }
   emitSpawnError(error = new Error("spawn failed")): void { this.spawnReject(error); for (const listener of this.errors) listener(error); this.exitResolve({ exitCode: null, signal: null }); }
   emitExit(exit: ProcessExit = { exitCode: 0, signal: null }): void { this.exitResolve(exit); }
