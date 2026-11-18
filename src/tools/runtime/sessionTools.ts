@@ -41,6 +41,6 @@ export const runtimeReadSessionLogs: ToolDefinition<AppContext> = {
 
 export const runtimeStopSession: ToolDefinition<AppContext> = {
   name: "runtime_stop_session", domain: "runtime", description: "Request a persistent Godot session to stop and report confirmed exit separately.",
-  inputSchema: { type: "object", properties: { sessionId, timeoutMs: { type: "integer", minimum: 0, default: 1000 } }, required: ["sessionId"] }, annotations: { readOnly: false, destructive: true, idempotent: true }, runtimeRequired: true, dependency: "godot",
+  inputSchema: { type: "object", properties: { sessionId, timeoutMs: { type: "integer", minimum: 0, default: 1000 }, confirm: { type: "boolean", description: "Destructive: must be true to stop the session, otherwise CONFIRMATION_REQUIRED." } }, required: ["sessionId"] }, annotations: { readOnly: false, destructive: true, idempotent: true }, runtimeRequired: true, dependency: "godot",
   async handler(args, ctx) { return { data: await ctx.runtimeSessions.stop(args.sessionId as string, args.timeoutMs as number) }; },
 };

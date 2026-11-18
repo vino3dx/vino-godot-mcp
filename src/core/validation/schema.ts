@@ -30,7 +30,8 @@ function check(s: JsonSchema, v: unknown, path: string, errors: string[]): unkno
       if (s.minLength !== undefined && v.length < s.minLength) errors.push(`${path}: shorter than ${s.minLength}`);
       return v;
     case "number": case "integer": {
-      if (typeof v !== "number" || Number.isNaN(v)) { errors.push(`${path}: expected ${s.type}, got ${typeOf(v)}`); return v; }
+      // Number.isFinite 同时挡住 NaN 与 Infinity:JSON 表达不了它们,但进程内调用仍可能传进来。
+      if (typeof v !== "number" || !Number.isFinite(v)) { errors.push(`${path}: expected ${s.type}, got ${typeOf(v)}`); return v; }
       if (s.type === "integer" && !Number.isInteger(v)) errors.push(`${path}: expected integer`);
       if (s.minimum !== undefined && v < s.minimum) errors.push(`${path}: must be >= ${s.minimum}`);
       if (s.maximum !== undefined && v > s.maximum) errors.push(`${path}: must be <= ${s.maximum}`);

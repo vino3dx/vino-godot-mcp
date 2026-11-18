@@ -18,11 +18,16 @@ export interface ServerInfo { name: string; version: string }
 type ToolArgs = Record<string, unknown>;
 type ToolArgsSchema = StandardSchemaWithJSON<ToolArgs, ToolArgs>;
 
-export async function startSdkServer<Ctx>(host: ToolHost<Ctx>, info: ServerInfo, logger: Logger): Promise<void> {
+export async function startSdkServer<Ctx>(host: ToolHost<Ctx>, info: ServerInfo, logger: Logger, instructions?: string): Promise<void> {
   const count = host.listTools().length;
   serveStdio(
     () => {
-      const server = new McpServer({ name: info.name, version: info.version });
+      const server = new McpServer({
+        name: info.name,
+        version: info.version,
+        // T1:让客户端从 initialize 就能看到当前权限状态(只读模式 / 高危需确认)。
+        ...(instructions !== undefined ? { instructions } : {}),
+      });
       for (const t of host.listTools()) {
         server.registerTool(
           t.name,

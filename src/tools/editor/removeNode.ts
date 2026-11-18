@@ -18,6 +18,7 @@ export const editorRemoveNode: ToolDefinition<AppContext> = {
     properties: {
       projectPath: { type: "string", description: "Project root override. Must match the project the Editor has open." },
       nodePath: { type: "string", minLength: 1, description: "Node path relative to the edited scene root ('.' = root, which is refused)." },
+      confirm: { type: "boolean", description: "Destructive: must be true to execute, otherwise CONFIRMATION_REQUIRED. Restorable with editor_undo / Ctrl+Z." },
     },
   },
   annotations: { readOnly: false, destructive: true, idempotent: false },

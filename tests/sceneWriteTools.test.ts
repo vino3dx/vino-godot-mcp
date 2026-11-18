@@ -351,18 +351,18 @@ test("scene_connect_signal: D3 — 不存在的信号名要么被拦截,要么�
 test("scene_disconnect_signal: 正常路径删除连接;不存在时明确提示且不报错", async (t) => {
   const { dir, host } = makeHost(t);
   const p = "res://scenes/main.tscn";
-  const r = ok(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "ready", targetPath: ".", method: "_on_ready" }));
+  const r = ok(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "ready", targetPath: ".", method: "_on_ready", confirm: true }));
   assert.equal(r["status"], "disconnected");
   const text = read(dir, "scenes/main.tscn");
   assertLossless(text);
   assert.ok(!text.includes("[connection"));
 
-  const missing = ok(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "ready", targetPath: ".", method: "_on_ready" }));
+  const missing = ok(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "ready", targetPath: ".", method: "_on_ready", confirm: true }));
   assert.equal(missing["status"], "not_found");
   assert.equal(missing["changed"], false);
   assert.match(String(missing["message"]), /not_found/);
 
-  assert.equal(err(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "1bad", targetPath: ".", method: "_x" })).code, "INVALID_ARGUMENT");
+  assert.equal(err(await host.callTool("scene_disconnect_signal", { path: p, sourcePath: "Player", signal: "1bad", targetPath: ".", method: "_x", confirm: true })).code, "INVALID_ARGUMENT");
 });
 
 test("scene_update_signal_connection: 精确更新、保留 flags、dryRun 与重复保护", async (t) => {
@@ -462,12 +462,12 @@ test("scene_add_node: created 回报新节点与写入的属性(静态值)", asy
 test("scene_remove_node: removed 回报整棵被删子树(文件顺序)", async (t) => {
   const { host } = makeHost(t);
   const p = "res://scenes/main.tscn";
-  const one = ok(await host.callTool("scene_remove_node", { path: p, nodePath: "Player/Sprite" }));
+  const one = ok(await host.callTool("scene_remove_node", { path: p, nodePath: "Player/Sprite", confirm: true }));
   assert.deepEqual(one["removed"], { nodePaths: ["Player/Sprite"], count: 1 });
 
   ok(await host.callTool("scene_add_node", { path: p, parentPath: "Player", nodeType: "Node2D", nodeName: "Holder" }));
   ok(await host.callTool("scene_add_node", { path: p, parentPath: "Player/Holder", nodeType: "Marker2D", nodeName: "Leaf" }));
-  const sub = ok(await host.callTool("scene_remove_node", { path: p, nodePath: "Player" }));
+  const sub = ok(await host.callTool("scene_remove_node", { path: p, nodePath: "Player", confirm: true }));
   assert.deepEqual(sub["removed"], {
     nodePaths: ["Player", "Player/Holder", "Player/Holder/Leaf"],
     count: 3,

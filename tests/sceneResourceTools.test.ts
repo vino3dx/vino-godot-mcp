@@ -113,7 +113,7 @@ test("scene_update_node_property: expectedHash 不匹配抛 FILE_CHANGED 且不�
 
 test("scene_remove_node: 删除子树,其余字节不变", async (t) => {
   const { dir, host } = makeHost(t);
-  const r = ok(await host.callTool("scene_remove_node", { path: "res://scenes/main.tscn", nodePath: "Player" }));
+  const r = ok(await host.callTool("scene_remove_node", { path: "res://scenes/main.tscn", nodePath: "Player", confirm: true }));
   assert.equal(r["changed"], true);
   const onDisk = fs.readFileSync(path.join(dir, "scenes", "main.tscn"), "utf8");
   assert.ok(!onDisk.includes('[node name="Player"'));

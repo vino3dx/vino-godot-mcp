@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { GodotMcpError } from "./core/errors.js";
 import { createLogger } from "./core/logger.js";
+import { permissionPolicyFromEnv } from "./core/permissions.js";
 import { ToolRegistry } from "./mcp/registry/toolRegistry.js";
 import { describeToolSelection, resolveToolSelection } from "./mcp/registry/toolSelection.js";
 import { ToolHost } from "./mcp/server/toolHost.js";
@@ -39,13 +40,25 @@ export function buildHost(logger = createLogger(), env: Readonly<Record<string, 
   const selection = resolveToolSelection(allTools, env);
   // info 级别:启动时就能看到生效的 preset / groups / 最终工具数(stderr,不影响协议)。
   logger.info(describeToolSelection(selection, allTools.length));
+  // T1:权限策略与工具选择同源(都只在这里读 env),ToolHost 是唯一执行闸门。
+  const policy = permissionPolicyFromEnv(env);
+  logger.info(policy.summary());
   const registry = new ToolRegistry<AppContext>().registerAll(selection.tools);
-  return new ToolHost(registry, createAppContext(logger), logger, selection.domains);
+  return new ToolHost(registry, createAppContext(logger), logger, selection.domains, policy);
+}
+
+/** 给 MCP 客户端的权限提示(read-only 时让 AI 明确知道写操作会被拒绝)。 */
+export function permissionInstructions(host: ToolHost<AppContext>): string {
+  const readOnly = host.permissionSummary().includes("read-only=true");
+  return readOnly
+    ? "READ-ONLY MODE is ON (VINO_GODOT_MCP_READ_ONLY=true): every tool whose annotations.readOnly is false returns READ_ONLY. Query tools still work. Do not retry writes; ask the operator to restart with the flag unset."
+    : "Write access is enabled. Tools with annotations.destructive=true additionally require an explicit confirm=true argument; pass dryRun=true to inspect the plan without writing.";
 }
 
 async function main(): Promise<void> {
   const logger = createLogger();
-  await startSdkServer(buildHost(logger), SERVER_INFO, logger);
+  const host = buildHost(logger);
+  await startSdkServer(host, SERVER_INFO, logger, permissionInstructions(host));
 }
 
 /** CLI 动作:无参数启动 MCP 服务,其余为自检/输出。 */

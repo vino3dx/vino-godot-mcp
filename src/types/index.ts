@@ -18,7 +18,10 @@ export type ErrorCode =
   | "EDITOR_NODE_TYPE_UNKNOWN" | "EDITOR_CANNOT_REMOVE_ROOT"
   | "EDITOR_HISTORY_EMPTY" | "EDITOR_WRITE_UNAVAILABLE" | "EDITOR_SELECTION_UNAVAILABLE"
   // 工具暴露策略(P1-C):配置写错了要启动即失败,不能静默降级成空工具集。
-  | "INVALID_CONFIGURATION" | "TOOL_SELECTION_EMPTY";
+  | "INVALID_CONFIGURATION" | "TOOL_SELECTION_EMPTY"
+  // 权限体系(T1):只读模式拦截写操作 / 高危操作缺少显式确认。
+  // READ_ONLY 表示"环境配置禁止写",不是参数错误;CONFIRMATION_REQUIRED 表示"调用方还没确认"。
+  | "READ_ONLY" | "CONFIRMATION_REQUIRED";
 
 /** 最小 JSON Schema 子集(工具入参),校验器只支持这些字段,见 core/validation。 */
 export interface JsonSchema {
@@ -62,10 +65,15 @@ export interface ImageContent { data: string; mimeType: string }
  */
 export interface ToolOutput { data: unknown; message?: string; warnings?: string[]; image?: ImageContent }
 
-/** 统一的工具执行结果(ToolHost 产出)。 */
+/** 工具执行失败时的错误信封。category/retryable 由 code 推导,便于 AI 决定下一步。 */
 export type ToolResult =
   | { ok: true; data: unknown; message?: string; warnings?: string[]; image?: ImageContent }
-  | { ok: false; error: { code: ErrorCode; message: string; details?: Record<string, unknown> } };
+  | { ok: false; error: { code: ErrorCode; category: ErrorCategory; retryable: boolean; message: string; details?: Record<string, unknown> } };
+
+/** 错误分类,与 code 一一映射(映射表在 core/errors.ts)。 */
+export type ErrorCategory =
+  | "configuration" | "permission" | "input" | "not-found" | "concurrency"
+  | "engine" | "editor" | "filesystem" | "internal";
 
 export interface ToolAnnotations { readOnly: boolean; destructive?: boolean; idempotent?: boolean }
 

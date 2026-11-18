@@ -164,6 +164,16 @@ Add this to your AI client's MCP config (`.cursor/mcp.json`, CodeBuddy, Cline, �
 | `VINO_GODOT_MCP_PRESET` | no | Which dependency range to expose: `default` / `runtime` / `editor` / `full` (`src/mcp/registry/toolSelection.ts`). When unset it is `default`, unless `VINO_GODOT_MCP_GROUPS` is set — then no dependency filter is applied (pre-P1-C behaviour). Unknown values fail at startup with `INVALID_CONFIGURATION`. |
 | `VINO_GODOT_MCP_GROUPS` | no | Comma-separated domain filter exposing fewer tools, e.g. `project,shader`. Empty/unset means "no domain filter", unchanged from before (`src/mcp/registry/toolSelection.ts`). Unknown domains fail with `INVALID_CONFIGURATION`. |
 | `VINO_GODOT_MCP_LOG` | no | `debug` / `info` / `warn` / `error`; default `info` (`src/core/logger.ts`). |
+| `VINO_GODOT_MCP_READ_ONLY` | no | `true` blocks every tool whose `annotations.readOnly` is false (`READ_ONLY` error), enforced in `ToolHost` before the handler runs (`src/core/permissions.ts`). Default/unset keeps write access. Invalid values fail at startup with `INVALID_CONFIGURATION`. |
+
+#### Permissions: read-only mode and destructive confirmation
+
+Two independent gates, both inside `ToolHost.callTool` so no tool can bypass them:
+
+1. **Read-only** (`VINO_GODOT_MCP_READ_ONLY=true`) — any tool with `annotations.readOnly === false` returns `READ_ONLY` and its handler is never invoked. All 27 query tools keep working. Note that tools which merely *read* engine data (`class_*`, `scene_get_node_info`, `project_validate`, `runtime_inspect_ui`, `runtime_check_addon_status`) are annotated `readOnly: false` because they run the engine or write its cache (`.vino-godot-mcp/`, `.godot/`), so they are blocked too.
+2. **Destructive confirmation** — the 5 tools annotated `destructive: true` (`scene_remove_node`, `scene_disconnect_signal`, `editor_remove_node`, `project_apply_changes`, `runtime_stop_session`) require `confirm: true`, otherwise `CONFIRMATION_REQUIRED`. Calls that only produce a plan (`dryRun: true`, or `mode: "preview"`) need no confirmation.
+
+The active mode is announced in the MCP `instructions` field and logged on startup, e.g. `[vino-godot-mcp] INFO permissions: read-only=false destructive=require-confirm`.
 
 #### Tool presets and filtering
 
@@ -470,6 +480,16 @@ vino-godot-mcp --help                  # 用法说明 + 下面的 stdio 提示
 | `VINO_GODOT_MCP_PRESET` | 否 | 按依赖范围暴露工具：`default` / `runtime` / `editor` / `full`（`src/mcp/registry/toolSelection.ts`）。未设置时取 `default`；但如果设置了 `VINO_GODOT_MCP_GROUPS`，则不按依赖过滤（保持 P1-C 之前的旧行为）。未知取值在启动时直接报 `INVALID_CONFIGURATION`。 |
 | `VINO_GODOT_MCP_GROUPS` | 否 | 逗号分隔的领域过滤，只向客户端暴露部分工具，例如 `project,shader`。空值/未设置表示不按领域过滤（与旧行为一致）（`src/mcp/registry/toolSelection.ts`）。未知领域会报 `INVALID_CONFIGURATION`。 |
 | `VINO_GODOT_MCP_LOG` | 否 | `debug` / `info` / `warn` / `error`，默认 `info`（`src/core/logger.ts`）。 |
+| `VINO_GODOT_MCP_READ_ONLY` | 否 | 设为 `true` 时，所有 `annotations.readOnly === false` 的工具一律返回 `READ_ONLY`，拦截点在 `ToolHost` 调 handler 之前（`src/core/permissions.ts`）。默认/未设置保持原有写权限。非法取值启动即报 `INVALID_CONFIGURATION`。 |
+
+#### 权限：只读模式与高危确认
+
+两道独立的闸门，都在 `ToolHost.callTool` 内，任何工具都无法绕过：
+
+1. **只读模式**（`VINO_GODOT_MCP_READ_ONLY=true`）—— 一切 `annotations.readOnly === false` 的工具返回 `READ_ONLY`，handler 完全不执行；27 个查询工具照常可用。注意 `class_*`、`scene_get_node_info`、`project_validate`、`runtime_inspect_ui`、`runtime_check_addon_status` 虽然只“读”引擎数据，但会启动引擎或写引擎缓存（`.vino-godot-mcp/`、`.godot/`），因此标注为 `readOnly: false`，同样会被拦下。
+2. **高危确认** —— 5 个标注 `destructive: true` 的工具（`scene_remove_node`、`scene_disconnect_signal`、`editor_remove_node`、`project_apply_changes`、`runtime_stop_session`）必须传 `confirm: true`，否则返回 `CONFIRMATION_REQUIRED`。只出计划的调用（`dryRun: true` 或 `mode: "preview"`）不需要确认。
+
+当前模式会写进 MCP `instructions`，并在启动日志里输出，例如 `[vino-godot-mcp] INFO permissions: read-only=false destructive=require-confirm`。
 
 #### 工具预设与筛选
 

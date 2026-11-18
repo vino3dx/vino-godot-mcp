@@ -19,6 +19,7 @@ export const sceneRemoveNode: ToolDefinition<AppContext> = {
       dryRun: { type: "boolean", description: "Compute the diff without writing." },
       expectedHash: { type: "string", description: "Current file sha256; mismatch raises FILE_CHANGED." },
       projectPath: { type: "string", description: "Project root override." },
+      confirm: { type: "boolean", description: "Destructive: must be true to delete, otherwise CONFIRMATION_REQUIRED. Use dryRun:true to preview the plan." },
     },
   },
   annotations: { readOnly: false, destructive: true },
