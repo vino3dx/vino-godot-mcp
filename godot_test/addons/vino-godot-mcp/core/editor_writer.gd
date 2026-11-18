@@ -192,12 +192,20 @@ static func remove_node(root: Node, node: Node) -> Dictionary:
 	var index := node.get_index()
 	var owner_path := NodeCollector.rel_path(root, node.owner)
 	var action_name := "MCP: remove %s" % str(node.name)
+	# 实测(Godot 4.6):remove_child 会把被删节点**及其子树的 owner 清空**。
+	# 旧注释认为 owner 不会丢,导致 undo 复原后 ownerPath 变成 "",节点虽然回来了
+	# 但不再属于场景(保存时会被丢掉)。这里在删除前记下每个节点的 owner,undo 时逐个还原。
+	var owners := []
+	for n in _subtree(node):
+		owners.append([n, n.owner])
 	manager.create_action(action_name)
 	manager.add_do_method(parent, "remove_child", node)
-	# 实测 UndoRedo 按注册顺序执行 undo：先 add_child，再 move_child 复位同级顺序。
-	# owner 在 remove_child 之后不会丢，所以 undo 不需要重设 owner。
+	# 实测 UndoRedo 按注册顺序执行 undo：先 add_child，再 move_child 复位同级顺序,最后还原 owner。
 	manager.add_undo_method(parent, "add_child", node)
 	manager.add_undo_method(parent, "move_child", node, index)
+	for pair in owners:
+		if pair[1] != null:
+			manager.add_undo_method(pair[0], "set_owner", pair[1])
 	manager.add_undo_reference(node)
 	manager.commit_action()
 	return {
@@ -212,6 +220,13 @@ static func remove_node(root: Node, node: Node) -> Dictionary:
 		"actionName": action_name,
 		"history": history_state(root),
 	}
+
+## 深度优先收集 node 及其全部后代(含自身),删除前用它记录 owner。
+static func _subtree(node: Node) -> Array:
+	var out := [node]
+	for child in node.get_children():
+		out.append_array(_subtree(child))
+	return out
 
 # ---------------------------------------------------------------- selection
 

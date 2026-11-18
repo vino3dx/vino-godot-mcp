@@ -66,8 +66,11 @@ func _log_error(function, file, line, code, rationale, editor_notify, error_type
 	var message := str(rationale)
 	if message == "":
 		message = str(code)
+	# push_warning 走的也是 _log_error(而不是 _log_message(error=true)),靠 error_type 区分:
+	# 实测 Godot 4.6 里 push_error → 0(ERROR)、push_warning → 1(WARNING),与 Logger.ErrorType 枚举一致。
+	# 必须在这里分流,否则警告会被当成 error 上报,把调用方的诊断方向带偏。
 	_forward({
-		"level": "error",
+		"level": "warning" if int(error_type) == 1 else "error",
 		"message": message,
 		"function": str(function),
 		"file": str(file),
