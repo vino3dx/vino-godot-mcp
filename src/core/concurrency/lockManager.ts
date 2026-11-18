@@ -1,12 +1,17 @@
 import path from "node:path";
 import { GodotMcpError } from "../errors.js";
+import { cancelledError } from "./cancellation.js";
 
 /** 谁在占用/等待锁。用于"提示真正运行的任务"。 */
 export interface LockOwner { tool: string; target: string; taskId: string; since: number }
 export type LockOwnerInput = Omit<LockOwner, "since" | "taskId"> & { taskId?: string };
 
 export interface LockWaitInfo { key: string; heldBy: LockOwner; queuePosition: number }
-export interface AcquireOptions { timeoutMs?: number; onWait?: (info: LockWaitInfo) => void }
+/**
+ * signal:排队期间的取消。abort 后这个 waiter 会从队列里摘掉并抛 TASK_CANCELLED,
+ * 不会占着位置、也不会在之后被 grant(见 grant 里的竞争处理)。
+ */
+export interface AcquireOptions { timeoutMs?: number; onWait?: (info: LockWaitInfo) => void; signal?: AbortSignal }
 export interface LockSnapshotEntry { key: string; holder: LockOwner; waiting: LockOwner[] }
 
 interface Waiter { owner: LockOwner; grant: () => void; reject: (e: Error) => void }
@@ -38,16 +43,42 @@ export class LockManager {
     opts.onWait?.({ key, heldBy: slot.holder, queuePosition: slot.queue.length + 1 });
     return new Promise<() => void>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
+      const cleanup = (): void => {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        opts.signal?.removeEventListener("abort", onAbort);
+      };
+      /** 授权与取消的竞争:已经决定放弃的 waiter 即使被 grant 也不能真的拿到锁。 */
       const waiter: Waiter = {
         owner,
-        grant: () => { if (timer) clearTimeout(timer); owner.since = Date.now(); resolve(this.releaser(key, owner)); },
+        grant: () => {
+          if (opts.signal?.aborted) {
+            // 先 grant 后 abort(或相反)都可能发生:把刚拿到的锁立刻还回去,再按取消返回,
+            // 否则这个 key 会永久卡在一个"已取消却持有锁"的持有者手里。
+            cleanup();
+            this.releaser(key, owner)();
+            reject(cancelledError({ operation: input.tool, stage: "queue", signal: opts.signal, hint: `Cancelled while waiting for lock "${key}".` }));
+            return;
+          }
+          cleanup();
+          owner.since = Date.now();
+          resolve(this.releaser(key, owner));
+        },
         reject,
       };
+      const onAbort = (): void => {
+        const i = slot.queue.indexOf(waiter);
+        if (i >= 0) slot.queue.splice(i, 1);
+        cleanup();
+        reject(cancelledError({ operation: input.tool, stage: "queue", signal: opts.signal, hint: `Cancelled while waiting for lock "${key}".` }));
+      };
       slot.queue.push(waiter);
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
       if (opts.timeoutMs !== undefined) {
         timer = setTimeout(() => {
           const i = slot.queue.indexOf(waiter);
           if (i >= 0) slot.queue.splice(i, 1);
+          cleanup();
           reject(new GodotMcpError("LOCK_TIMEOUT", `Timed out after ${opts.timeoutMs}ms waiting for lock "${key}"`, {
             key, waitedMs: opts.timeoutMs, heldBy: slot.holder, heldForMs: Date.now() - slot.holder.since,
           }));

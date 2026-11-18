@@ -27,7 +27,7 @@ const def = (name: string, handler: ToolDefinition["handler"], annotations: Tool
   handler,
 });
 
-test("每个错误码都有分类,分类覆盖 9 类", () => {
+test("每个错误码都有分类,分类覆盖 10 类", () => {
   const codes: ErrorCode[] = [
     "INVALID_ARGUMENT", "TOOL_NOT_FOUND", "FILE_NOT_FOUND", "PARSE_ERROR", "LOCK_TIMEOUT", "TASK_TIMEOUT",
     "RUNTIME_REQUIRED", "RUNTIME_FAILED", "INTERNAL", "PROJECT_NOT_FOUND", "RESOURCE_NOT_FOUND",
@@ -37,20 +37,22 @@ test("每个错误码都有分类,分类覆盖 9 类", () => {
     "EDITOR_OBJECT_INVALID", "EDITOR_RESPONSE_TOO_LARGE", "EDITOR_PROPERTY_UNKNOWN", "EDITOR_PROPERTY_INVALID",
     "EDITOR_NODE_EXISTS", "EDITOR_NODE_TYPE_UNKNOWN", "EDITOR_CANNOT_REMOVE_ROOT", "EDITOR_HISTORY_EMPTY",
     "EDITOR_WRITE_UNAVAILABLE", "EDITOR_SELECTION_UNAVAILABLE", "INVALID_CONFIGURATION", "TOOL_SELECTION_EMPTY",
-    "READ_ONLY", "CONFIRMATION_REQUIRED",
+    "READ_ONLY", "CONFIRMATION_REQUIRED", "TASK_CANCELLED",
   ];
-  const valid: ErrorCategory[] = ["configuration", "permission", "input", "not-found", "concurrency", "engine", "editor", "filesystem", "internal"];
+  // T07 起第 10 类:cancelled(调用方主动取消,与 concurrency/engine 都不同)
+  const valid: ErrorCategory[] = ["configuration", "permission", "input", "not-found", "concurrency", "engine", "editor", "filesystem", "internal", "cancelled"];
   for (const code of codes) assert.ok(valid.includes(errorCategory(code)), `${code} → ${errorCategory(code)}`);
   // 抽查语义正确的几个
   assert.equal(errorCategory("READ_ONLY"), "permission");
   assert.equal(errorCategory("FILE_CHANGED"), "filesystem");
   assert.equal(errorCategory("EDITOR_NODE_NOT_FOUND"), "editor");
   assert.equal(errorCategory("GODOT_NOT_FOUND"), "engine");
+  assert.equal(errorCategory("TASK_CANCELLED"), "cancelled");
 });
 
 test("retryable 只对'等一会可能就好了'的错误为真", () => {
   for (const c of ["LOCK_TIMEOUT", "TASK_TIMEOUT", "BRIDGE_TIMEOUT"] as ErrorCode[]) assert.equal(errorRetryable(c), true, c);
-  for (const c of ["INVALID_ARGUMENT", "READ_ONLY", "FILE_CHANGED", "PROTECTED_PATH", "EDITOR_NODE_NOT_FOUND", "INTERNAL"] as ErrorCode[]) assert.equal(errorRetryable(c), false, c);
+  for (const c of ["INVALID_ARGUMENT", "READ_ONLY", "FILE_CHANGED", "PROTECTED_PATH", "EDITOR_NODE_NOT_FOUND", "INTERNAL", "TASK_CANCELLED"] as ErrorCode[]) assert.equal(errorRetryable(c), false, c);
 });
 
 test("GodotMcpError 自带 category/retryable,无需调用方手填", () => {

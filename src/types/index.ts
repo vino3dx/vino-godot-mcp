@@ -21,7 +21,10 @@ export type ErrorCode =
   | "INVALID_CONFIGURATION" | "TOOL_SELECTION_EMPTY"
   // 权限体系(T1):只读模式拦截写操作 / 高危操作缺少显式确认。
   // READ_ONLY 表示"环境配置禁止写",不是参数错误;CONFIRMATION_REQUIRED 表示"调用方还没确认"。
-  | "READ_ONLY" | "CONFIRMATION_REQUIRED";
+  | "READ_ONLY" | "CONFIRMATION_REQUIRED"
+  // 任务取消(T07):调用方主动取消(notifications/cancelled),与 TASK_TIMEOUT 是两件事。
+  // 取消不是失败、也不可重试;底层是否已真正停止写在 details.cleanup 里。
+  | "TASK_CANCELLED";
 
 /** 最小 JSON Schema 子集(工具入参),校验器只支持这些字段,见 core/validation。 */
 export interface JsonSchema {
@@ -73,7 +76,9 @@ export type ToolResult =
 /** 错误分类,与 code 一一映射(映射表在 core/errors.ts)。 */
 export type ErrorCategory =
   | "configuration" | "permission" | "input" | "not-found" | "concurrency"
-  | "engine" | "editor" | "filesystem" | "internal";
+  | "engine" | "editor" | "filesystem" | "internal"
+  // 调用方主动取消:既不是失败也不是超时,重试没有意义。
+  | "cancelled";
 
 export interface ToolAnnotations { readOnly: boolean; destructive?: boolean; idempotent?: boolean }
 
@@ -89,6 +94,20 @@ export interface ToolAnnotations { readOnly: boolean; destructive?: boolean; ide
  * 必须逐个工具显式声明,不得由 name 前缀、domain 或 runtimeRequired 推断。
  */
 export type ToolDependency = "none" | "godot" | "bridge";
+
+/**
+ * 单次工具调用的执行上下文(T07 取消机制)。
+ *
+ * 为什么单独一个参数、而不是挂在 AppContext 上:AppContext 是整个 server 共享的单例,
+ * 把 signal 放进去会让并发请求互相取消。这里是"每次调用一份",生命周期与 MCP 请求一致。
+ *
+ * 只有确实需要支持取消的长任务 handler 才声明第三个参数;其余 69 个工具保持两参数签名,
+ * TypeScript 允许(可选参数),不需要改动。
+ */
+export interface ToolExecutionContext {
+  /** MCP 请求级取消信号(ctx.mcpReq.signal);未传 = 该调用不可取消。 */
+  signal?: AbortSignal;
+}
 
 /**
  * 工具定义。Ctx 由组合根(src/index.ts)决定,mcp 层不知道它的具体类型。
@@ -111,5 +130,6 @@ export interface ToolDefinition<Ctx = unknown> {
    * 因此不能用它推断 dependency,也不能用 dependency 反推它;当前没有执行门槛,只用于展示。
    */
   runtimeRequired: boolean;
-  handler(args: Record<string, unknown>, ctx: Ctx): Promise<ToolOutput>;
+  /** exec 只有长任务会用到;两参数 handler 与之兼容。 */
+  handler(args: Record<string, unknown>, ctx: Ctx, exec?: ToolExecutionContext): Promise<ToolOutput>;
 }

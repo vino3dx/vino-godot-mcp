@@ -44,6 +44,8 @@ const CATEGORY: Record<ErrorCode, ErrorCategory> = {
   TOOL_SELECTION_EMPTY: "configuration",
   READ_ONLY: "permission",
   CONFIRMATION_REQUIRED: "permission",
+  // T07:取消是独立分类 —— 既不是 concurrency(超时/锁竞争),也不是 engine(引擎报错)。
+  TASK_CANCELLED: "cancelled",
 };
 
 /** 重试语义:只有"等一会可能就好了"的错误才算可重试。 */
@@ -54,6 +56,8 @@ const RETRYABLE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "BRIDGE_DISCONNECTED",
   "BRIDGE_UNAVAILABLE",
 ]);
+// T07:刻意不包含 TASK_CANCELLED。调用方主动取消不是"稍后再试就好",
+// 把它标成 retryable 会让 AI 立刻重跑同一个长任务(再起一个 Godot 进程)。
 
 export const errorCategory = (code: ErrorCode): ErrorCategory => CATEGORY[code] ?? "internal";
 export const errorRetryable = (code: ErrorCode): boolean => RETRYABLE.has(code);
@@ -83,7 +87,11 @@ export interface ErrorDiagnostics {
 /** 所有可预期错误都抛 GodotMcpError,带稳定错误码。 */
 export class GodotMcpError extends Error {
   readonly code: ErrorCode;
-  readonly details: Record<string, unknown> | undefined;
+  /**
+   * 诊断上下文。**非 readonly**:取消/超时之后才知道的清理结果(attachCleanup)要补进来,
+   * 同时必须保留错误原有的 code / message —— 清理失败不能覆盖原始原因。
+   */
+  details: Record<string, unknown> | undefined;
   /** 由 code 推导,不单独维护,避免两处不一致。 */
   readonly category: ErrorCategory;
   readonly retryable: boolean;
