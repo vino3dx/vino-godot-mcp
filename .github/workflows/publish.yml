@@ -1,4 +1,3 @@
-
 name: Publish to npm and GitHub Release
 
 on:
@@ -54,12 +53,11 @@ jobs:
         run: npm ci
 
       # 4. 运行测试
-      # 当前 npm test 已包含 TypeScript 构建
       - name: Run tests
         run: npm test
 
-      # 5. 读取版本号并检查发布状态
-      - name: Check version and prepare tag
+      # 5. 校验三处版本号一致性并准备 Tag 与带前缀的 Release 名称
+      - name: Check version consistency and prepare tag
         id: version
         shell: bash
         run: |
@@ -68,6 +66,9 @@ jobs:
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
+          
+          # 设定带有产品前缀的 GitHub Release 标题，而 Tag 保持纯净的 vX.Y.Z
+          RELEASE_NAME="Vino Godot MCP v${VERSION}"
 
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid package version: $VERSION"
@@ -79,14 +80,57 @@ jobs:
             exit 1
           fi
 
+          # ----------------------------------------------------
+          # 版本号一致性闸门 (package.json / server.json / plugin.cfg)
+          # ----------------------------------------------------
+          node -e '
+            const fs = require("fs");
+            const pkgVersion = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            
+            let serverRootVersion = null;
+            let serverPkgVersion = null;
+            if (fs.existsSync("server.json")) {
+              const srv = JSON.parse(fs.readFileSync("server.json", "utf8"));
+              serverRootVersion = srv.version;
+              serverPkgVersion = srv.packages?.[0]?.version ?? serverRootVersion;
+            }
+
+            const pluginCfgPath = "godot_test/addons/vino-godot-mcp/plugin.cfg";
+            if (!fs.existsSync(pluginCfgPath)) {
+              console.error(`::error::Missing plugin.cfg at ${pluginCfgPath}`);
+              process.exit(1);
+            }
+            const pluginCfg = fs.readFileSync(pluginCfgPath, "utf8");
+            const pluginMatch = pluginCfg.match(/^\s*version\s*=\s*"([^"]+)"/m);
+            const pluginVersion = pluginMatch ? pluginMatch[1] : null;
+
+            console.log("Version Sync Check:");
+            console.log(`  package.json:           ${pkgVersion}`);
+            console.log(`  server.json (root):     ${serverRootVersion}`);
+            console.log(`  server.json (packages): ${serverPkgVersion}`);
+            console.log(`  plugin.cfg:             ${pluginVersion}`);
+
+            const mismatches = [];
+            if (serverRootVersion && serverRootVersion !== pkgVersion) mismatches.push("server.json.version");
+            if (serverPkgVersion && serverPkgVersion !== pkgVersion) mismatches.push("server.json.packages[0].version");
+            if (pluginVersion !== pkgVersion) mismatches.push("plugin.cfg");
+
+            if (mismatches.length > 0) {
+              console.error(`::error::Version mismatch detected in: ${mismatches.join(", ")}. Expected all to match ${pkgVersion}.`);
+              process.exit(1);
+            }
+            console.log("✅ All versions match!");
+          '
+
           echo "Package: $PACKAGE_NAME"
           echo "Version: $VERSION"
           echo "Tag: $TAG"
+          echo "Release Name: $RELEASE_NAME"
 
           echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "release_name=Vino Godot MCP v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
 
           # 检查 Git Tag
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -107,9 +151,6 @@ jobs:
           echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
           echo "npm_exists=$NPM_EXISTS" >> "$GITHUB_OUTPUT"
 
-          # 如果 npm 已存在但 Git Tag 不存在，
-          # 不重复创建版本 Tag，跳过 npm 发布。
-          # GitHub Release 和安装包仍然可以继续处理。
           if [[ "$NPM_EXISTS" == "true" && "$TAG_EXISTS" == "false" ]]; then
             echo "::notice::npm version already exists. Skip npm publishing."
             echo "skip_npm=true" >> "$GITHUB_OUTPUT"
@@ -138,7 +179,7 @@ jobs:
         if: steps.version.outputs.skip_npm != 'true'
         run: npm publish --provenance
 
-      # 8. 构建两个安装包
+      # 8. 构建两个安装包（采用 editor-addon 与 ai-server 清晰命名）
       - name: Build release packages
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -149,7 +190,7 @@ jobs:
           mkdir -p release
 
           # ========================================
-          # A. Godot Dock Plugin
+          # A. Godot Editor Addon Plugin
           # ========================================
 
           PLUGIN_SOURCE="godot_test/addons/vino-godot-mcp"
@@ -170,7 +211,7 @@ jobs:
 
           cp -a "$PLUGIN_SOURCE" "$PLUGIN_STAGE/addons/vino-godot-mcp"
 
-          PLUGIN_ZIP="vino-godot-mcp-plugin-${VERSION}.zip"
+          PLUGIN_ZIP="vino-godot-mcp-editor-addon-${VERSION}.zip"
 
           (
             cd "$PLUGIN_STAGE"
@@ -178,7 +219,7 @@ jobs:
           )
 
           # ========================================
-          # B. MCP Server
+          # B. AI MCP Server
           # ========================================
 
           if [[ ! -d "src" ]]; then
@@ -195,33 +236,25 @@ jobs:
 
           mkdir -p "$SERVER_STAGE"
 
-          # Source code
           cp -a src "$SERVER_STAGE/"
-
-          # Compiled TypeScript output
           cp -a dist "$SERVER_STAGE/"
-
-          # Package manifests
           cp package.json package-lock.json "$SERVER_STAGE/"
 
-          # MCP configuration
           if [[ -f "server.json" ]]; then
             cp server.json "$SERVER_STAGE/"
           fi
 
-          # Documentation and license
           for FILE in README.md LICENSE; do
             if [[ -f "$FILE" ]]; then
               cp "$FILE" "$SERVER_STAGE/"
             fi
           done
 
-          # Documentation directory
           if [[ -d "docs" ]]; then
             cp -a docs "$SERVER_STAGE/"
           fi
 
-          SERVER_ZIP="vino-godot-mcp-server-${VERSION}.zip"
+          SERVER_ZIP="vino-godot-mcp-ai-server-${VERSION}.zip"
 
           (
             cd "release/server-package"
@@ -241,7 +274,7 @@ jobs:
           echo "Plugin ZIP: ${PLUGIN_ZIP}"
           echo "Server ZIP: ${SERVER_ZIP}"
 
-      # 9. 创建或更新 GitHub Release
+      # 9. 创建或更新 GitHub Release (带产品前缀名称)
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -263,7 +296,7 @@ jobs:
             echo "Created Release: $RELEASE_NAME"
           fi
 
-      # 10. 上传两个安装包
+      # 10. 上传带有清晰命名规范的两个安装包
       - name: Upload release packages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -273,8 +306,8 @@ jobs:
           set -euo pipefail
 
           gh release upload "$RELEASE_TAG" \
-            "release/vino-godot-mcp-plugin-${VERSION}.zip" \
-            "release/vino-godot-mcp-server-${VERSION}.zip" \
+            "release/vino-godot-mcp-editor-addon-${VERSION}.zip" \
+            "release/vino-godot-mcp-ai-server-${VERSION}.zip" \
             --clobber
 
           echo "Release packages uploaded successfully."
@@ -285,18 +318,19 @@ jobs:
           PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NAME: ${{ steps.version.outputs.release_name }}
         run: |
           {
-            echo "## Vino Godot MCP v${VERSION}"
+            echo "## ${RELEASE_NAME}"
             echo
             echo "### npm"
             echo "- Package: ${PACKAGE_NAME}@${VERSION}"
             echo
             echo "### GitHub Release"
             echo "- Tag: ${TAG}"
-            echo "- Plugin: vino-godot-mcp-plugin-${VERSION}.zip"
-            echo "- MCP Server: vino-godot-mcp-server-${VERSION}.zip"
+            echo "- Godot Editor Addon: vino-godot-mcp-editor-addon-${VERSION}.zip"
+            echo "- AI MCP Server: vino-godot-mcp-ai-server-${VERSION}.zip"
             echo
             echo "### Installation packages"
-            echo "Both ZIP packages have been uploaded."
+            echo "Both ZIP packages have been uploaded with clear names."
           } >> "$GITHUB_STEP_SUMMARY"
