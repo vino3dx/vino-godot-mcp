@@ -22,6 +22,13 @@ const COMPLEX_TYPES := [
 	"Color", "Rect2", "Rect2i", "Transform2D", "Quaternion",
 ]
 
+## 可以由结构化 JSON(而不是字面量字符串)直接构造的类型。
+## 裸字典({"x":1,"y":2})只有在期望类型属于这里时才会被当成载荷解析,避免把普通字典误当结构体。
+const STRUCTURED_TYPES := [
+	"vector2", "vector2i", "vector3", "vector3i", "vector4", "vector4i",
+	"color", "rect2", "rect2i", "quaternion", "basis", "transform2d", "transform3d", "plane", "aabb",
+]
+
 # ---------------------------------------------------------------- encode
 
 static func encode(value, depth := 0) -> Dictionary:
@@ -61,7 +68,11 @@ static func encode(value, depth := 0) -> Dictionary:
 		TYPE_TRANSFORM2D:
 			return {"valueType": "Transform2D", "value": {"x": _vec2(value.x), "y": _vec2(value.y), "origin": _vec2(value.origin)}}
 		TYPE_TRANSFORM3D:
-			return {"valueType": "Transform3D", "value": {"origin": {"x": value.origin.x, "y": value.origin.y, "z": value.origin.z}}}
+			# 修复:历史上只回传 origin,basis 丢失会让"读回来的变换"与真实值不一致。
+			return {"valueType": "Transform3D", "value": {
+				"basis": {"x": _vec3(value.basis.x), "y": _vec3(value.basis.y), "z": _vec3(value.basis.z)},
+				"origin": _vec3(value.origin),
+			}}
 		TYPE_BASIS:
 			return {"valueType": "Basis", "value": {"x": {"x": value.x.x, "y": value.x.y, "z": value.x.z}, "y": {"x": value.y.x, "y": value.y.y, "z": value.y.z}, "z": {"x": value.z.x, "y": value.z.y, "z": value.z.z}}}
 		TYPE_QUATERNION:
@@ -144,6 +155,9 @@ static func _clip_string(text: String) -> String:
 static func _vec2(v: Vector2) -> Dictionary:
 	return {"x": v.x, "y": v.y}
 
+static func _vec3(v: Vector3) -> Dictionary:
+	return {"x": v.x, "y": v.y, "z": v.z}
+
 static func _rect2(v: Rect2) -> Dictionary:
 	return {"x": v.position.x, "y": v.position.y, "w": v.size.x, "h": v.size.y}
 
@@ -180,6 +194,9 @@ static func _build(spec, expected_type: int) -> Dictionary:
 		if parsed != null and typeof(parsed) == expected_type:
 			return {"ok": true, "value": parsed, "valueType": type_string(typeof(parsed)), "error": ""}
 		return {"ok": false, "value": null, "valueType": type_string(expected_type), "error": "String literal '%s' is not a valid %s" % [spec, type_string(expected_type)]}
+	# 裸结构体字典:{"x":1,"y":2} 配 expected_type=Vector2 —— 期望类型已知且可结构化构造时,按载荷解析。
+	if spec is Dictionary and expected_type != TYPE_NIL and type_string(expected_type).to_lower() in STRUCTURED_TYPES:
+		return _build_typed(type_string(expected_type), spec)
 	return {"ok": true, "value": spec, "valueType": type_string(typeof(spec)), "error": ""}
 
 static func _build_typed(tname: String, raw) -> Dictionary:
@@ -217,6 +234,18 @@ static func _build_typed(tname: String, raw) -> Dictionary:
 			return _build_color(raw)
 		"rect2", "rect2i":
 			return _build_rect(tname, raw)
+		"quaternion":
+			return _build_quaternion(raw)
+		"basis":
+			return _build_basis(raw)
+		"transform3d":
+			return _build_transform3d(raw)
+		"transform2d":
+			return _build_transform2d(raw)
+		"plane":
+			return _build_plane(raw)
+		"aabb":
+			return _build_aabb(raw)
 		"array":
 			if raw is Array:
 				return _built(raw)
@@ -225,15 +254,13 @@ static func _build_typed(tname: String, raw) -> Dictionary:
 			if raw is Dictionary:
 				return _built(raw)
 			return _bad(tname, raw)
-		"packedstringarray":
-			if raw is Array:
-				return _built(PackedStringArray(raw))
-			return _bad(tname, raw)
+		"packedbytearray", "packedint32array", "packedint64array", "packedfloat32array", "packedfloat64array", "packedstringarray", "packedvector2array", "packedvector3array", "packedcolorarray":
+			return _build_packed(tname, raw)
 	if typeof(raw) == TYPE_STRING:
-		var parsed = str_to_var(raw)
+		var parsed := str_to_var(raw)
 		if parsed != null and type_string(typeof(parsed)) == tname:
 			return _built(parsed)
-	return {"ok": false, "value": null, "valueType": tname, "error": "Unsupported valueType '%s' (supported: bool, int, float, String, StringName, NodePath, Vector2/2i/3/3i/4/4i, Color, Rect2/2i, Array, Dictionary, PackedStringArray)" % tname}
+	return {"ok": false, "value": null, "valueType": tname, "error": "Unsupported valueType '%s' (supported: bool, int, float, String, StringName, NodePath, Vector2/2i/3/3i/4/4i, Color, Rect2/2i, Quaternion, Basis, Transform2D, Transform3D, Plane, AABB, Array, Dictionary, Packed*Array)" % tname}
 
 static func _built(value) -> Dictionary:
 	return {"ok": true, "value": value, "valueType": type_string(typeof(value)), "error": ""}
@@ -241,16 +268,50 @@ static func _built(value) -> Dictionary:
 static func _bad(tname: String, raw) -> Dictionary:
 	return {"ok": false, "value": null, "valueType": tname, "error": "valueType '%s' cannot be built from %s" % [tname, type_string(typeof(raw))]}
 
-static func _components(raw, count: int) -> Array:
-	if raw is Dictionary:
-		var keys := ["x", "y", "z", "w"]
+static func _fail_typed(tname: String, message: String) -> Dictionary:
+	return {"ok": false, "value": null, "valueType": tname, "error": message}
+
+## 只接受有限数值:NaN / Infinity 无法在 JSON 里表达,但从字符串或别处混进来时必须拒绝,
+## 否则它们会被静默写进属性,变成一个"看起来生效、实际有毒"的变换。
+static func _is_num(v) -> bool:
+	if typeof(v) == TYPE_INT:
+		return true
+	if typeof(v) == TYPE_FLOAT:
+		return is_finite(v)
+	return false
+
+static func _num_error(tname: String, raw, what: String) -> String:
+	return "valueType '%s': %s must be a finite number, got %s" % [tname, what, type_string(typeof(raw))]
+
+## 严格取分量:字典必须恰好提供所需键(不许缺省补 0),数组长度必须精确相等(不许截断多余分量)。
+static func _components(raw, count: int, tname: String) -> Dictionary:
+	var keys := ["x", "y", "z", "w"]
+	if typeof(raw) == TYPE_DICTIONARY:
+		for i in count:
+			if not raw.has(keys[i]):
+				return {"ok": false, "error": "valueType '%s': missing component '%s' (expected keys %s, no defaults)" % [tname, keys[i], str(keys.slice(0, count))]}
 		var out := []
 		for i in count:
-			out.append(raw.get(keys[i], 0))
-		return out
-	if raw is Array and raw.size() >= count:
-		return raw.slice(0, count)
-	return []
+			out.append(raw[keys[i]])
+		var extra := []
+		for k in raw.keys():
+			if not (str(k) in keys.slice(0, count)):
+				extra.append(str(k))
+		if extra.size() > 0:
+			return {"ok": false, "error": "valueType '%s': unknown component(s) %s (expected only %s)" % [tname, str(extra), str(keys.slice(0, count))]}
+		return {"ok": true, "value": out}
+	if typeof(raw) == TYPE_ARRAY:
+		if raw.size() != count:
+			return {"ok": false, "error": "valueType '%s': expected exactly %d components, got %d" % [tname, count, raw.size()]}
+		return {"ok": true, "value": raw.duplicate()}
+	return {"ok": false, "error": "valueType '%s': expected a Dictionary with keys %s or an Array of %d numbers, got %s" % [tname, str(keys.slice(0, count)), count, type_string(typeof(raw))]}
+
+## 字符串字面量回退:"Vector2(1, 2)" / "Transform3D(...)" 交给引擎自己解析,但类型必须真的对上。
+static func _literal_of(raw: String, tname: String) -> Dictionary:
+	var parsed = str_to_var(raw)
+	if parsed != null and type_string(typeof(parsed)).to_lower() == tname.to_lower():
+		return _built(parsed)
+	return _fail_typed(tname, "String literal '%s' is not a valid %s" % [_clip_string(raw), tname])
 
 static func _build_vector(tname: String, raw) -> Dictionary:
 	var key := tname.to_lower()
@@ -259,12 +320,15 @@ static func _build_vector(tname: String, raw) -> Dictionary:
 		count = 3
 	elif key.begins_with("vector4"):
 		count = 4
-	var parts := _components(raw, count)
-	if parts.size() != count:
-		return _bad(tname, raw)
-	for part in parts:
-		if typeof(part) != TYPE_INT and typeof(part) != TYPE_FLOAT:
-			return _bad(tname, raw)
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	var comp := _components(raw, count, tname)
+	if not comp["ok"]:
+		return _fail_typed(tname, comp["error"])
+	var parts: Array = comp["value"]
+	for i in parts.size():
+		if not _is_num(parts[i]):
+			return _fail_typed(tname, _num_error(tname, parts[i], "component %d" % i))
 	match key:
 		"vector2":
 			return _built(Vector2(parts[0], parts[1]))
@@ -278,43 +342,254 @@ static func _build_vector(tname: String, raw) -> Dictionary:
 			return _built(Vector4(parts[0], parts[1], parts[2], parts[3]))
 		"vector4i":
 			return _built(Vector4i(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])))
-	return _bad(tname, raw)
+	return _fail_typed(tname, "Unsupported vector type '%s'" % tname)
+
+## 把 "x"/"y"/"z" 这类三键字典解析成 Vector3(严格),供 Basis / AABB / Transform3D 复用。
+static func _build_vec3_field(tname: String, field: String, raw) -> Dictionary:
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "valueType '%s': '%s' must be an object with x/y/z, got %s" % [tname, field, type_string(typeof(raw))])
+	var comp := _components(raw, 3, tname)
+	if not comp["ok"]:
+		return _fail_typed(tname, "%s%s" % [field, String(comp["error"]).replace("valueType '%s':" % tname, "")])
+	var parts: Array = comp["value"]
+	for i in parts.size():
+		if not _is_num(parts[i]):
+			return _fail_typed(tname, _num_error(tname, parts[i], "%s.%s" % [field, ["x", "y", "z"][i]]))
+	return _built(Vector3(parts[0], parts[1], parts[2]))
 
 static func _build_color(raw) -> Dictionary:
-	if raw is Dictionary:
-		return _built(Color(
-			float(raw.get("r", 0.0)),
-			float(raw.get("g", 0.0)),
-			float(raw.get("b", 0.0)),
-			float(raw.get("a", 1.0)),
-		))
-	if raw is Array and raw.size() >= 3:
-		return _built(Color(float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]) if raw.size() > 3 else 1.0))
-	if raw is String:
-		var parsed = str_to_var(raw)
-		if parsed is Color:
-			return _built(parsed)
-	return _bad("Color", raw)
+	var tname := "Color"
+	if typeof(raw) == TYPE_STRING:
+		var text: String = raw.strip_edges()
+		if text.begins_with("#"):
+			var hex := text.substr(1)
+			var valid := true
+			for ch in hex:
+				if not ("0123456789abcdefABCDEF".contains(ch)):
+					valid = false
+					break
+			if not valid:
+				return _fail_typed(tname, "Hex color '%s' contains non-hex characters" % _clip_string(text))
+			if not (hex.length() in [3, 4, 6, 8]):
+				return _fail_typed(tname, "Hex color '%s' must have 3, 4, 6 or 8 digits, got %d" % [_clip_string(text), hex.length()])
+			if hex.length() <= 4:
+				var expanded := ""
+				for ch in hex:
+					expanded += ch + ch
+				hex = expanded
+			if hex.length() == 6:
+				hex += "ff"
+			return _built(Color.html(hex))
+		return _literal_of(raw, tname)
+	if typeof(raw) == TYPE_DICTIONARY:
+		for k in ["r", "g", "b"]:
+			if not raw.has(k):
+				return _fail_typed(tname, "Color expects keys r/g/b (a optional), missing '%s'" % k)
+		for k in raw.keys():
+			if not (str(k) in ["r", "g", "b", "a"]):
+				return _fail_typed(tname, "Color has unknown key '%s' (expected r/g/b/a)" % str(k))
+		var rgba := [raw["r"], raw["g"], raw["b"], raw.get("a", 1.0)]
+		for i in rgba.size():
+			if not _is_num(rgba[i]):
+				return _fail_typed(tname, _num_error(tname, rgba[i], "component %d" % i))
+		return _built(Color(rgba[0], rgba[1], rgba[2], rgba[3]))
+	if typeof(raw) == TYPE_ARRAY:
+		if not (raw.size() in [3, 4]):
+			return _fail_typed(tname, "Color expects exactly 3 or 4 numbers [r,g,b(,a)], got %d" % raw.size())
+		for i in raw.size():
+			if not _is_num(raw[i]):
+				return _fail_typed(tname, _num_error(tname, raw[i], "component %d" % i))
+		return _built(Color(raw[0], raw[1], raw[2], raw[3] if raw.size() == 4 else 1.0))
+	return _fail_typed(tname, "Color expects '#rrggbb', {r,g,b[,a]} or [r,g,b[,a]], got %s" % type_string(typeof(raw)))
 
 static func _build_rect(tname: String, raw) -> Dictionary:
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
 	var parts := []
-	if raw is Dictionary:
-		parts = [raw.get("x", 0), raw.get("y", 0), raw.get("w", raw.get("width", 0)), raw.get("h", raw.get("height", 0))]
-	elif raw is Array and raw.size() >= 4:
-		parts = raw.slice(0, 4)
-	if parts.size() != 4:
-		return _bad(tname, raw)
-	for part in parts:
-		if typeof(part) != TYPE_INT and typeof(part) != TYPE_FLOAT:
-			return _bad(tname, raw)
+	if typeof(raw) == TYPE_DICTIONARY:
+		var need := ["x", "y"]
+		var w_key := "w" if raw.has("w") else "width"
+		var h_key := "h" if raw.has("h") else "height"
+		if not raw.has(w_key) or not raw.has(h_key):
+			need.append("w")
+			need.append("h")
+			return _fail_typed(tname, "valueType '%s': missing %s (expected x/y/w/h or x/y/width/height)" % [tname, str(need)])
+		for k in need:
+			if not raw.has(k):
+				return _fail_typed(tname, "valueType '%s': missing component '%s'" % [tname, k])
+		for k in raw.keys():
+			if not (str(k) in ["x", "y", "w", "h", "width", "height"]):
+				return _fail_typed(tname, "valueType '%s': unknown component '%s'" % [tname, str(k)])
+		parts = [raw["x"], raw["y"], raw[w_key], raw[h_key]]
+	elif typeof(raw) == TYPE_ARRAY:
+		if raw.size() != 4:
+			return _fail_typed(tname, "valueType '%s': expected exactly 4 numbers [x,y,w,h], got %d" % [tname, raw.size()])
+		parts = raw.duplicate()
+	else:
+		return _fail_typed(tname, "valueType '%s': expected an object/array or a literal string, got %s" % [tname, type_string(typeof(raw))])
+	for i in parts.size():
+		if not _is_num(parts[i]):
+			return _fail_typed(tname, _num_error(tname, parts[i], "component %d" % i))
 	if tname.to_lower() == "rect2i":
 		return _built(Rect2i(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])))
 	return _built(Rect2(Vector2(parts[0], parts[1]), Vector2(parts[2], parts[3])))
+
+static func _build_quaternion(raw) -> Dictionary:
+	var tname := "Quaternion"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	var comp := _components(raw, 4, tname)
+	if not comp["ok"]:
+		return _fail_typed(tname, comp["error"])
+	var parts: Array = comp["value"]
+	for i in parts.size():
+		if not _is_num(parts[i]):
+			return _fail_typed(tname, _num_error(tname, parts[i], "component %d" % i))
+	return _built(Quaternion(parts[0], parts[1], parts[2], parts[3]))
+
+static func _build_basis(raw) -> Dictionary:
+	var tname := "Basis"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "Basis expects {x:{x,y,z}, y:{...}, z:{...}}, got %s" % type_string(typeof(raw)))
+	var vecs := []
+	for k in raw.keys():
+		if not (str(k) in ["x", "y", "z"]):
+			return _fail_typed(tname, "Basis has unknown axis '%s' (expected x/y/z)" % str(k))
+	for axis in ["x", "y", "z"]:
+		if not raw.has(axis):
+			return _fail_typed(tname, "Basis missing axis '%s'" % axis)
+		var v := _build_vec3_field(tname, axis, raw[axis])
+		if not v["ok"]:
+			return v
+		vecs.append(v["value"])
+	return _built(Basis(vecs[0], vecs[1], vecs[2]))
+
+static func _build_transform3d(raw) -> Dictionary:
+	var tname := "Transform3D"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "Transform3D expects {basis:{x,y,z}, origin:{x,y,z}}, got %s" % type_string(typeof(raw)))
+	for k in raw.keys():
+		if not (str(k) in ["basis", "origin"]):
+			return _fail_typed(tname, "Transform3D has unknown key '%s' (expected basis/origin)" % str(k))
+	if not raw.has("origin"):
+		return _fail_typed(tname, "Transform3D missing 'origin'")
+	var basis_dict = raw.get("basis")
+	if basis_dict == null:
+		return _fail_typed(tname, "Transform3D missing 'basis' (identity is not assumed)")
+	var basis := _build_basis(basis_dict)
+	if not basis["ok"]:
+		return basis
+	var origin := _build_vec3_field(tname, "origin", raw["origin"])
+	if not origin["ok"]:
+		return origin
+	return _built(Transform3D(basis["value"], origin["value"]))
+
+static func _build_transform2d(raw) -> Dictionary:
+	var tname := "Transform2D"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "Transform2D expects {x:{x,y}, y:{x,y}, origin:{x,y}}, got %s" % type_string(typeof(raw)))
+	for k in raw.keys():
+		if not (str(k) in ["x", "y", "origin"]):
+			return _fail_typed(tname, "Transform2D has unknown key '%s' (expected x/y/origin)" % str(k))
+	var parts := []
+	for axis in ["x", "y", "origin"]:
+		if not raw.has(axis):
+			return _fail_typed(tname, "Transform2D missing '%s'" % axis)
+		var comp := _components(raw[axis], 2, tname)
+		if not comp["ok"]:
+			return _fail_typed(tname, "%s: %s" % [axis, comp["error"]])
+		for v in comp["value"]:
+			if not _is_num(v):
+				return _fail_typed(tname, _num_error(tname, v, axis))
+		parts.append(comp["value"])
+	return _built(Transform2D(Vector2(parts[0][0], parts[0][1]), Vector2(parts[1][0], parts[1][1]), Vector2(parts[2][0], parts[2][1])))
+
+static func _build_plane(raw) -> Dictionary:
+	var tname := "Plane"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "Plane expects {x,y,z,d} (normal + distance), got %s" % type_string(typeof(raw)))
+	for k in raw.keys():
+		if not (str(k) in ["x", "y", "z", "d"]):
+			return _fail_typed(tname, "Plane has unknown key '%s' (expected x/y/z/d)" % str(k))
+	for k in ["x", "y", "z", "d"]:
+		if not raw.has(k):
+			return _fail_typed(tname, "Plane missing '%s'" % k)
+		if not _is_num(raw[k]):
+			return _fail_typed(tname, _num_error(tname, raw[k], k))
+	return _built(Plane(raw["x"], raw["y"], raw["z"], raw["d"]))
+
+static func _build_aabb(raw) -> Dictionary:
+	var tname := "AABB"
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Dictionary):
+		return _fail_typed(tname, "AABB expects {position:{x,y,z}, size:{x,y,z}}, got %s" % type_string(typeof(raw)))
+	for k in raw.keys():
+		if not (str(k) in ["position", "size"]):
+			return _fail_typed(tname, "AABB has unknown key '%s' (expected position/size)" % str(k))
+	for k in ["position", "size"]:
+		if not raw.has(k):
+			return _fail_typed(tname, "AABB missing '%s'" % k)
+	var pos := _build_vec3_field(tname, "position", raw["position"])
+	if not pos["ok"]:
+		return pos
+	var size := _build_vec3_field(tname, "size", raw["size"])
+	if not size["ok"]:
+		return size
+	return _built(AABB(pos["value"], size["value"]))
+
+## Packed 数值数组:元素必须是有限数值;向量/颜色类 Packed 数组不支持(需要逐元素对象,容易误解),
+## 明确拒绝而不是悄悄转成 0。
+static func _build_packed(tname: String, raw) -> Dictionary:
+	var key := tname.to_lower()
+	if typeof(raw) == TYPE_STRING:
+		return _literal_of(raw, tname)
+	if not (raw is Array):
+		return _fail_typed(tname, "valueType '%s' expects an Array, got %s" % [tname, type_string(typeof(raw))])
+	if key == "packedstringarray":
+		for i in raw.size():
+			if not (typeof(raw[i]) == TYPE_STRING or typeof(raw[i]) == TYPE_STRING_NAME):
+				return _fail_typed(tname, "PackedStringArray element %d must be a string, got %s" % [i, type_string(typeof(raw[i]))])
+		return _built(PackedStringArray(raw))
+	if key in ["packedvector2array", "packedvector3array", "packedcolorarray"]:
+		return _fail_typed(tname, "%s is not accepted through the bridge; pass an Array of encoded objects instead" % tname)
+	for i in raw.size():
+		if not _is_num(raw[i]):
+			return _fail_typed(tname, _num_error(tname, raw[i], "element %d" % i))
+	match key:
+		"packedbytearray":
+			for v in raw:
+				if v < 0 or v > 255:
+					return _fail_typed(tname, "PackedByteArray element %s is out of range 0..255" % str(v))
+			return _built(PackedByteArray(raw))
+		"packedint32array":
+			return _built(PackedInt32Array(raw))
+		"packedint64array":
+			return _built(PackedInt64Array(raw))
+		"packedfloat32array":
+			return _built(PackedFloat32Array(raw))
+		"packedfloat64array":
+			return _built(PackedFloat64Array(raw))
+	return _fail_typed(tname, "Unsupported packed array type '%s'" % tname)
 
 static func _convert(value, expected_type: int) -> Dictionary:
 	var actual := typeof(value)
 	if actual == expected_type:
 		return {"ok": true, "value": value}
+	# 目标属性是 Packed* 数组、调用方给了普通 Array:走同一套 _build_packed 校验后再转。
+	if expected_type >= TYPE_PACKED_BYTE_ARRAY and expected_type <= TYPE_PACKED_COLOR_ARRAY and actual == TYPE_ARRAY:
+		var packed := _build_packed(type_string(expected_type), value)
+		if packed["ok"]:
+			return {"ok": true, "value": packed["value"]}
+		return {"ok": false, "error": packed["error"]}
 	match expected_type:
 		TYPE_FLOAT:
 			if actual == TYPE_INT:
